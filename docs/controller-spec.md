@@ -15,7 +15,6 @@ controller firmware
 ├── serial input (UART / USB-serial)        ┐
 │   ├── text commands (manual / scripted)   ├→ event {type, channel, note, value}
 │   └── raw MIDI bytes (computer proxy)     ┘
-├── autonomous source (dev-only)            ┘
 ├── ESP-NOW transmit (5-byte frame, broadcast)
 ├── serial command interface (text + settings/panic)
 └── config (parasol)
@@ -52,11 +51,6 @@ forwarded verbatim as the frame's channel byte.
   - CC1 mod wheel (vibrato) and CC123/CC120/CC121 (panic)
 - Each message becomes an event with the MIDI channel as its channel.
 
-## Autonomous source (dev-only)
-
-- A fixed looping demo pattern (and, optionally, a random stress mode) to
-  validate the full path and timing without a computer attached.
-
 ## Event → ESP-NOW
 
 - Events map 1:1 to the protocol frame (`channel, type, note, value, value hi`).
@@ -65,6 +59,8 @@ forwarded verbatim as the frame's channel byte.
 
 ## Backlog
 
+- Demo/standalone mode (autonomous source) — self-playing pattern without a
+  computer attached.
 - USB-MIDI host (MIDI keyboard plugged directly into the controller) — no
   hardware decision yet (S3 vs USB host shield vs classic+proxy).
 - DIN → UART @31250 input.
