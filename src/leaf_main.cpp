@@ -11,6 +11,7 @@
 #define PWM_CHANNEL 0
 #define PWM_RES 8
 #define ESP_NOW_CHANNEL 1  // fixed WiFi channel; must match the controller
+#define LEAF_DEBUG 0       // 1 = serial note logging; 0 = silent (battery)
 
 static uint8_t current_note = 0xFF;
 static bool note_active = false;
@@ -20,7 +21,9 @@ static void note_on(uint8_t note, uint8_t velocity) {
     note_active = true;
     ledcChangeFrequency(PWM_CHANNEL, note_to_freq(note), PWM_RES);
     ledcWrite(PWM_CHANNEL, (uint32_t)velocity << 1); // 7-bit -> 8-bit, max 254 < 256
+#if LEAF_DEBUG
     Serial.printf("[%lu] on %d (%u Hz) vel %d\n", millis(), note, note_to_freq(note), velocity);
+#endif
 }
 
 static void note_off(uint8_t note) {
@@ -28,7 +31,9 @@ static void note_off(uint8_t note) {
     note_active = false;
     current_note = 0xFF;
     ledcWrite(PWM_CHANNEL, 0);
+#if LEAF_DEBUG
     Serial.printf("[%lu] off %d\n", millis(), note);
+#endif
 }
 
 static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
@@ -77,4 +82,6 @@ void setup() {
     Serial.println("leaf ready");
 }
 
-void loop() {}
+void loop() {
+    delay(1); // yield so the CPU idles instead of spinning
+}
