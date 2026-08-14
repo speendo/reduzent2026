@@ -54,6 +54,11 @@ parasol web UI, entered briefly after boot or when the controller signals it.
 - Verify before finishing: `pio run` compiles, logic tested natively, and
   check for redundant / low-quality / inefficient code.
 
+## Git
+
+- The user pushes to GitHub themselves; agents never push.
+- Develop new features in branches, not directly on `main`.
+
 ## Workflow
 
 - Use superpowers skills: brainstorm → plan → TDD → verify.
