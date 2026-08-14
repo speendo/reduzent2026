@@ -19,10 +19,10 @@ MVP vertical slice: MIDI in → controller → ESP-NOW → leaf plays.
 Backlog: multiple controllers, parasol image upload, acks/retry + dynamic
 pairing, battery sleep, multi-channel actuators, solenoid on/off-hold.
 
-## Research spikes (pending)
+## Research
 
-- Audio/PWM approach on ESP32-C3: LEDC vs mozzi / ESP32Synth.
-- MIDI protocol essentials (what we can drop).
+Resolved — see `docs/research-notes.md` for decisions and rationale. Key
+choices: LEDC PWM output (not mozzi/ESP32Synth); minimal MIDI subset.
 
 ## Commands
 
