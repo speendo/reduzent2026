@@ -115,5 +115,7 @@ range; (solenoid) strike duration + velocity table.
   shows ESP-NOW interference.
 - Voice-stealing refinement (per-voice priority beyond quietest/oldest).
 - Per-note vibrato/pitch-bend LFO (currently one LFO per leaf).
+- Solenoid power/timing tuning: max power, min push duration, shortest
+  noticeable push (calibrate per solenoid).
 - Solenoid on/off-hold modes (thermal management).
 - Battery sleep / low-power mode in live idle.
