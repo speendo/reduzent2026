@@ -2,19 +2,19 @@
 
 ## Purpose
 
-The central ESP32 controller receives input from a computer over serial —
-either human-typed text commands or raw MIDI bytes — and broadcasts it to the
-leaves as ESP-NOW events. A real MIDI keyboard is connected through a computer
-acting as a proxy (MIDI → serial); a keyboard plugged directly into the
-controller (USB-MIDI host) is backlog.
+The central ESP32 controller receives text commands from a computer over serial
+(human-typed, scripted, or emitted by the MIDI bridge) and broadcasts them to the
+leaves as ESP-NOW events. MIDI parsing lives on the computer bridge: a real MIDI
+keyboard is connected through a computer (MIDI → text commands), not directly to
+the controller; a keyboard plugged directly into the controller (USB-MIDI host)
+is backlog.
 
 ## Architecture
 
 ```
 controller firmware
 ├── serial input (UART / USB-serial)        ┐
-│   ├── text commands (manual / scripted)   ├→ event {type, channel, note, value}
-│   └── raw MIDI bytes (computer proxy)     ┘
+│   └── text commands (manual / scripted / MIDI bridge)  ├→ event {type, channel, note, value}  ┘
 ├── ESP-NOW transmit (5-byte frame, broadcast)
 ├── serial command interface (text + settings/panic)
 └── config (parasol)
@@ -66,7 +66,7 @@ forwarded verbatim as the frame's channel byte.
   hardware decision yet (S3 vs USB host shield vs classic+proxy).
 - DIN → UART @31250 input.
 - Multiple controllers / MIDI emitters.
-- MIDI-driven `ENTER_SETTINGS` trigger.
+- MIDI-driven `ENTER_SETTINGS` trigger (currently triggered by the bridge `s` key / text command).
 - Real-time clock sync (Start/Stop/Clock).
 - Raw MIDI bytes over serial (parse MIDI on the controller) — only needed for
   a DIN → UART @31250 direct input with no computer; the computer bridge
