@@ -121,3 +121,9 @@ range; (solenoid) hold duration + velocity table.
   noticeable push (calibrate per solenoid).
 - Solenoid on/off-hold modes (thermal management).
 - Battery sleep / low-power mode in live idle.
+  - Idea under consideration: idle-timeout sleep (sleep after N s of
+    inactivity, wake on activity) — rejected for the controller because the
+    first hit after a pause is exactly the note where latency hurts most in a
+    percussion instrument, and a receive-only leaf must wake on packet anyway
+    (radio can't fully sleep without jitter on every note). Needs a proper
+    wake-on-packet design; configurable duration should be a parasol setting.
