@@ -56,7 +56,7 @@ parasol web UI, entered briefly after boot or when the controller signals it.
 
 ## Git
 
-- The user pushes to GitHub themselves; agents never push.
+- The user pushes to GitHub themselves; agents only commit but never push.
 - Develop new features in branches, not directly on `main`.
 
 ## Workflow
