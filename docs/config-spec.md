@@ -36,9 +36,12 @@ leaves. See `docs/research-notes.md` §6 and the parasol docs.
 - channel (0–15)
 - actuator type (piezo / solenoid)
 - GPIO pin
-- solenoid: note number, strike duration (ms), velocity min/max power
+- solenoid: note number, hold duration (ms), velocity min/max power
 - piezo: render path (0 = arpeggio, 1 = 1-bit), ADSR (A/D/S/R), arpeggio rate
   (Hz), pitch-bend range (semitones), vibrato depth range (cents)
+
+Hold duration controls ring vs mute (a longer hold presses the striker against
+the surface, muting it) and must exceed the solenoid's pull-in time.
 
 ### Controller
 
