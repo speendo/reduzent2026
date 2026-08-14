@@ -57,6 +57,7 @@ void setup() {
     ledcWrite(PWM_CHANNEL, 0);
 
     WiFi.mode(WIFI_STA);
+    esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
     if (esp_now_init() != ESP_OK) {
         Serial.println("esp_now_init failed");
         return;
@@ -68,7 +69,7 @@ void setup() {
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, broadcast, 6);
     peer.channel = ESP_NOW_CHANNEL;
-    peer.ifidx = (wifi_interface_t)ESP_IF_WIFI_STA;
+    peer.ifidx = WIFI_IF_STA;
     if (esp_now_add_peer(&peer) != ESP_OK) {
         Serial.println("add_peer failed");
     }

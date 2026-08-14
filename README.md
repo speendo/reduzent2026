@@ -24,6 +24,6 @@ reduzent2026/
 
 - **leaf-piezo** — ESP32-C3 + piezo actuator (current board)
 - **leaf-solenoid** — ESP32-C3 + solenoid actuator
-- **controller** — ESP32 (non-C3) that sends ESP-NOW commands
+- **controller** — ESP32 (non-C3) that sends ESP-NOW commands (this slice uses a C3 as a temporary controller)
 
 See AGENTS.md for build commands and hardware details.
