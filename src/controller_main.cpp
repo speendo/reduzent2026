@@ -63,4 +63,5 @@ void loop() {
             line_buf[line_len++] = c;
         }
     }
+    delay(1); // yield so the CPU idles between polls instead of spinning
 }
