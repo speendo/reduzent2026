@@ -31,6 +31,11 @@ leaves. See `docs/research-notes.md` §6 and the parasol docs.
 
 ## Settings (parasol)
 
+### Common (WiFi / ESP-NOW)
+
+- ESP-NOW channel (1–14; must match across the controller and all leaves)
+- settings-mode AP SSID + password (per device)
+
 ### Leaf
 
 - channel (0–15)
@@ -47,7 +52,6 @@ the surface, muting it) and must exceed the solenoid's pull-in time.
 
 - settings-mode window duration
 - settings-mode trigger (serial / parasol action)
-- WiFi AP credentials
 
 ## parasol integration
 
@@ -64,6 +68,8 @@ the surface, muting it) and must exceed the solenoid's pull-in time.
 
 - Compile-time actuator split (separate piezo/solenoid envs) if footprint
   demands.
-- STA mode / shared network for configuring many devices at once.
+- STA mode / shared network for configuring many devices at once (needs STA
+  SSID + password settings).
+- ESP-NOW encryption (PMK/LMK) — only if a shared network needs to be trusted.
 - parasol image upload (OTA).
 - Solenoid velocity curve as a full editable table (MVP: min/max scalars).
