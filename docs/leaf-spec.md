@@ -80,9 +80,11 @@ leaf firmware
 - One LEDC channel + timer, fixed ~20 kHz; duty = strike intensity.
 - **Note-on**: strike only if `note == my_note` (from parasol config; all
   solenoids share one channel). duty = velocity lookup table; start a ~40 ms
-  strike window, then duty = 0.
+  hold window, then duty = 0.
 - **Note-off**: ignored (percussive).
-- Retrigger restarts the strike window.
+- Retrigger restarts the hold window.
+- Hold duration controls ring vs mute (longer = striker pressed against the
+  surface = muted) and must exceed the solenoid's pull-in time.
 - Velocity→duty lookup table calibrated on hardware (solenoid force is not
   linear in duty).
 
@@ -96,7 +98,7 @@ leaf firmware
 
 Per-leaf settings: channel, actuator type, GPIO, (solenoid) note, (piezo)
 render path + ADSR params + arpeggio rate + pitch-bend range + vibrato depth
-range; (solenoid) strike duration + velocity table.
+range; (solenoid) hold duration + velocity table.
 
 ## Defaults (parasol-configurable)
 
@@ -105,7 +107,7 @@ range; (solenoid) strike duration + velocity table.
 | Arpeggio rate    | 60 Hz (per-note advance)       |
 | Piezo ADSR       | A5 / D100 / S70 % / R100 ms    |
 | Pitch-bend range | ±2 semitones                   |
-| Solenoid strike  | 40 ms                          |
+| Solenoid hold duration | 40 ms                     |
 | Vibrato          | 6 Hz LFO, 0–50 cents (CC1)     |
 | 1-bit sample rate| 32 kHz                         |
 
