@@ -46,6 +46,14 @@ void test_settings_target(void) {
     TEST_ASSERT_EQUAL_UINT8(5, f.note);
 }
 
+void test_settings_min_id(void) {
+    espnow_frame_t f;
+    TEST_ASSERT_EQUAL(1, parse_command("settings 0\n", &f));
+    TEST_ASSERT_EQUAL_UINT8(ESP_NOW_CHANNEL_BROADCAST, f.channel);
+    TEST_ASSERT_EQUAL_UINT8(EVENT_ENTER_SETTINGS, f.type);
+    TEST_ASSERT_EQUAL_UINT8(0, f.note); // min valid target id
+}
+
 void test_pitch_bend(void) {
     espnow_frame_t f;
     TEST_ASSERT_EQUAL(1, parse_command("p 1 8192\n", &f));
@@ -122,6 +130,7 @@ void test_rejects(void) {
     TEST_ASSERT_EQUAL(0, parse_command("p 0\n", &f));          // missing arg
     TEST_ASSERT_EQUAL(0, parse_command("a 0 200\n", &f));      // pressure out of range
     TEST_ASSERT_EQUAL(0, parse_command("pa 0 200 100\n", &f)); // note out of range
+    TEST_ASSERT_EQUAL(0, parse_command("pa 0 64\n", &f));      // poly aftertouch missing arg
     TEST_ASSERT_EQUAL(0, parse_command("g 0 200\n", &f));      // program out of range
     TEST_ASSERT_EQUAL(0, parse_command("v 0 200\n", &f));      // depth out of range
     TEST_ASSERT_EQUAL(0, parse_command("s\n", &f));           // incomplete settings
@@ -135,6 +144,7 @@ int main(void) {
     RUN_TEST(test_panic);
     RUN_TEST(test_settings);
     RUN_TEST(test_settings_target);
+    RUN_TEST(test_settings_min_id);
     RUN_TEST(test_pitch_bend);
     RUN_TEST(test_pitch_bend_extremes);
     RUN_TEST(test_channel_aftertouch);

@@ -83,7 +83,7 @@ def load_settings(path: str) -> Dict[str, Any]:
 
 def save_settings(path: str, settings: Dict[str, Any]) -> None:
     """Write `settings` as JSON, creating parent directories as needed."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w") as f:
         json.dump(settings, f, indent=2)
 
@@ -100,7 +100,10 @@ def resolve_settings(settings, midi_names, serial_names):
     port = settings.get("serial_port")
     if port not in serial_names:
         port = serial_names[0] if serial_names else None
-    baud = int(settings.get("baud", DEFAULT_BAUD))
+    try:
+        baud = int(settings.get("baud", DEFAULT_BAUD))
+    except (ValueError, TypeError):
+        baud = DEFAULT_BAUD
     return midi_name, port, baud
 
 
@@ -189,15 +192,22 @@ def main() -> None:
     # callback thread.
     lock = threading.Lock()
     state = {"ser": ser}
+    write_error = False
 
     def on_message(msg):
+        nonlocal write_error
         cmd = midi_to_command(msg)
         if cmd is None:
             return
         with lock:
             s = state["ser"]
             if s is not None:
-                s.write((cmd + "\n").encode())
+                try:
+                    s.write((cmd + "\n").encode())
+                except OSError:
+                    if not write_error:
+                        write_error = True
+                        print("serial write failed (is the serial port still connected?)", flush=True)
         if not quiet:
             print(cmd, flush=True)
 
@@ -227,23 +237,27 @@ def main() -> None:
                     if new_midi is None or new_port is None:
                         print("no ports detected; keeping current connection")
                     else:
-                        new_inport, new_ser = open_connections(new_midi, new_port, new_baud)
-                        with lock:
-                            state["ser"] = None
-                            ser.close()
-                        inport.callback = None
-                        inport.close()
-                        inport, ser = new_inport, new_ser
-                        with lock:
-                            state["ser"] = ser
-                        inport.callback = on_message
-                        midi_name, port, baud = new_midi, new_port, new_baud
-                        save_settings(config, {
-                            "midi_input": midi_name,
-                            "serial_port": port,
-                            "baud": baud,
-                        })
-                        print(f"bridging {inport.name} -> {port} @ {baud}")
+                        try:
+                            new_inport, new_ser = open_connections(new_midi, new_port, new_baud)
+                        except OSError:
+                            print("could not open new ports; keeping current connection")
+                        else:
+                            with lock:
+                                state["ser"] = None
+                                ser.close()
+                            inport.callback = None
+                            inport.close()
+                            inport, ser = new_inport, new_ser
+                            with lock:
+                                state["ser"] = ser
+                            inport.callback = on_message
+                            midi_name, port, baud = new_midi, new_port, new_baud
+                            save_settings(config, {
+                                "midi_input": midi_name,
+                                "serial_port": port,
+                                "baud": baud,
+                            })
+                            print(f"bridging {inport.name} -> {port} @ {baud}")
                 finally:
                     tty.setraw(fd)
             if ch in ("s", "S"):
