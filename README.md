@@ -11,10 +11,12 @@ configuration is done through the parasol web interface.
 
 ```
 reduzent2026/
-├── src/         Firmware entry points (currently the piezo smoke test)
+├── src/         Firmware entry points (leaf_main.cpp: ESP-NOW RX → piezo
+│               tone; controller_main.cpp: serial → ESP-NOW TX)
 ├── include/     Shared project headers
-├── lib/         Shared libraries (future: espnow protocol, drivers)
-├── test/        Unit tests
+├── lib/         Shared libraries (reduzent/: espnow frame, note→freq,
+│               text parser)
+├── test/        Unit tests (one suite folder per test file)
 └── platformio.ini
 ```
 
