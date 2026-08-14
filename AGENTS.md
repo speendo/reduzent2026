@@ -17,7 +17,8 @@ MVP vertical slice: MIDI in → controller → ESP-NOW → leaf plays.
 5. 12 leaves (6 piezo, 6 solenoid); downsize hardware only if forced.
 
 Backlog: multiple controllers, parasol image upload, acks/retry + dynamic
-pairing, battery sleep, multi-channel actuators, solenoid on/off-hold.
+pairing, battery sleep, multi-channel actuators, solenoid on/off-hold,
+switch Arduino → ESP-IDF (only if parasol/footprint forces it).
 
 ## Research
 

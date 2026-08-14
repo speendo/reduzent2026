@@ -145,3 +145,9 @@ coarse "tap vs full" (2–3 steps), not a smooth velocity curve.
 - Solenoid on/off-hold modes (thermal matters).
 - acks/retry + dynamic pairing, battery sleep, multi-channel actuators,
   multiple controllers, parasol image upload.
+- Switch Arduino → ESP-IDF. Deferred: Arduino is a layer over IDF (raw
+  `esp_now_*`/`nvs_*` already callable), so nothing currently forces it.
+  Reconsider if parasol requires IDF build-system features (Kconfig/CMake
+  components) or if flash/RAM footprint on 12 battery leaves demands it.
+  Cost is low and flat while Arduino idioms stay fenced in `src/*_main.cpp`
+  and `lib/` stays pure C++.

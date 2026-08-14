@@ -10,6 +10,8 @@
             "includePath": [
                 "/config/reduzent2026/include",
                 "/config/reduzent2026/src",
+                "/config/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
+                "/config/reduzent2026/lib/reduzent",
                 "/config/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/newlib/platform_include",
                 "/config/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/freertos/include",
                 "/config/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/freertos/include/esp_additions/freertos",
@@ -232,7 +234,6 @@
                 "/config/.platformio/packages/framework-arduinoespressif32/libraries/USB/src",
                 "/config/.platformio/packages/framework-arduinoespressif32/libraries/Update/src",
                 "/config/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src",
-                "/config/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                 "/config/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                 "/config/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
                 "/config/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
@@ -243,6 +244,8 @@
                 "path": [
                     "/config/reduzent2026/include",
                     "/config/reduzent2026/src",
+                    "/config/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
+                    "/config/reduzent2026/lib/reduzent",
                     "/config/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/newlib/platform_include",
                     "/config/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/freertos/include",
                     "/config/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/freertos/include/esp_additions/freertos",
@@ -465,7 +468,6 @@
                     "/config/.platformio/packages/framework-arduinoespressif32/libraries/USB/src",
                     "/config/.platformio/packages/framework-arduinoespressif32/libraries/Update/src",
                     "/config/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src",
-                    "/config/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                     "/config/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                     "/config/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
                     "/config/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
