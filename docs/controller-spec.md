@@ -37,6 +37,8 @@ forwarded verbatim as the frame's channel byte.
   - `v <ch> <depth>` vibrato (CC1) · `panic` all notes off · `settings` enter settings
 - **Raw MIDI bytes** — step 2 (computer proxy): the computer sends standard MIDI
   bytes over serial at the link baud (31250 is DIN-only, not used here).
+- Real-time keyboard testing (no Enter): `tools/keyboard-serial.py` sends a
+  note-on/off blip per keypress.
 
 ## MIDI parser
 
