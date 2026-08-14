@@ -33,7 +33,7 @@ fire-and-forget — no acknowledgements.
 | PROGRAM_CHANGE      | target      | —    | program             | piezo: select mode (0 = arpeggio, 1 = 1-bit)  |
 | CC1_VIBRATO         | target      | —    | depth               | piezo: vibrato depth                          |
 | PANIC               | 0xFF        | —    | —                   | all leaves: stop everything                   |
-| ENTER_SETTINGS      | target/0xFF | —    | —                   | enter settings mode (WiFi + parasol)          |
+| ENTER_SETTINGS      | 0xFF        | id  | —                   | enter settings mode; note = leaf id (0–254), 0xFF = all |
 
 ## Addressing & mapping
 
@@ -41,6 +41,9 @@ fire-and-forget — no acknowledgements.
   and accepts frames where `channel == MY_CHANNEL || channel == 0xFF`.
 - No MAC table, no pairing — the controller broadcasts, leaves filter.
 - MIDI channel → node: each leaf is assigned a channel via parasol.
+- Each leaf also has a unique **node id** (0–254, parasol), distinct from its
+  channel and used only to address a single leaf (e.g. `ENTER_SETTINGS`).
+  Channels are shared (solenoids), so a channel alone does not identify a leaf.
 
 ## Note → frequency
 

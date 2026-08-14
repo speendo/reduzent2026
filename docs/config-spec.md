@@ -38,6 +38,8 @@ leaves. See `docs/research-notes.md` §6 and the parasol docs.
 
 ### Leaf
 
+- node id (0–254, unique per leaf — used to target a single leaf, e.g. settings
+  mode; channels are shared by solenoids)
 - channel (0–15)
 - actuator type (piezo / solenoid)
 - GPIO pin
