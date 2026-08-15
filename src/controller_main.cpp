@@ -28,7 +28,7 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
     if (frame.type != EVENT_HEARTBEAT) return;
     Serial.printf("hb %02x:%02x:%02x:%02x:%02x:%02x played=%u last=%us\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-                  frame.note, frame.value);
+                  (unsigned)frame.note, (unsigned)frame.value);
 }
 
 static void transmit(const espnow_frame_t* f) {
