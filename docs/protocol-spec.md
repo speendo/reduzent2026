@@ -39,7 +39,7 @@ fire-and-forget — no acknowledgements.
 ## Heartbeat (leaf → controller)
 
 - The only reverse traffic: every leaf broadcasts one `HEARTBEAT` frame every
-  10 s (±1 s random jitter) to the broadcast MAC — fire-and-forget, no acks.
+  10 s (+0…1 s random jitter) to the broadcast MAC — fire-and-forget, no acks.
 - Payload: `note` = 1 if the leaf played a note since its previous heartbeat
   (set by `note_on`, i.e. a NOTE event with velocity > 0), else 0; `value` =
   seconds since the last note played (saturates at 255; counts from boot until
