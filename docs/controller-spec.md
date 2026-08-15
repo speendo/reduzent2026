@@ -16,6 +16,7 @@ controller firmware
 ├── serial input (UART / USB-serial)        ┐
 │   └── text commands (manual / scripted / MIDI bridge)  ├→ event {type, channel, note, value}  ┘
 ├── ESP-NOW transmit (5-byte frame, broadcast)
+├── ESP-NOW receive → heartbeat log (hb <mac> played=N last=Ns)
 ├── serial command interface (text + settings/panic)
 └── config (parasol)
 ```
@@ -78,3 +79,7 @@ forwarded verbatim as the frame's channel byte.
   polling with a UART/USB-CDC receive callback so it idles *and* reacts
   immediately (drops the ~1 ms polling granularity). Board-dependent: classic
   ESP32 → `Serial.onReceive(cb)`; ESP32-C3 (USB CDC) → `Serial.onEvent(ARDUINO_HW_CDC_RX_EVENT, cb)`.
+- Reopen the serial port on read failure too: a read-side `OSError` currently
+  swallows the error and returns empty data without marking the port for
+  reopen, so recovery only triggers on a write failure. A cable pull while no
+  MIDI is flowing would otherwise never reconnect.

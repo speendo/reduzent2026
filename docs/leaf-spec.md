@@ -13,6 +13,7 @@ the underlying decisions.
 ```
 leaf firmware
 ├── ESP-NOW receive (broadcast, channel-first filter)   ← shared
+├── heartbeat broadcast (every 10 s)                    ← shared
 ├── event dispatch → actuator                           ← shared
 ├── config store (parasol)                              ← shared
 ├── settings/live mode state machine                    ← shared
@@ -90,7 +91,8 @@ leaf firmware
 
 ## Settings / live mode
 
-- Live = default: ESP-NOW receive + actuator only (no WiFi stack / web UI).
+- Live = default: ESP-NOW receive + actuator, plus a heartbeat broadcast every
+  10 s; radio kept awake (no WiFi stack / web UI).
 - Settings = WiFi + parasol web UI, entered briefly after boot or on
   `ENTER_SETTINGS`. Detailed in the config spec.
 
