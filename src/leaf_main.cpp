@@ -15,7 +15,6 @@
 #define PWM_CHANNEL 0
 #define PWM_RES 8
 #define ESP_NOW_CHANNEL 1  // fixed WiFi channel; must match the controller
-#define LEAF_DEBUG 0       // 1 = serial note logging; 0 = silent (battery)
 #define HEARTBEAT_MS 10000
 #define HEARTBEAT_JITTER_MS 1000
 
