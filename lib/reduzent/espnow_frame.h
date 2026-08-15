@@ -15,6 +15,7 @@ typedef enum {
     EVENT_CC1_VIBRATO = 5,
     EVENT_PANIC = 6,
     EVENT_ENTER_SETTINGS = 7,
+    EVENT_HEARTBEAT = 8,
 } espnow_event_type_t;
 
 // Fixed 5-byte frame, channel-first (leaf filters on byte 0).

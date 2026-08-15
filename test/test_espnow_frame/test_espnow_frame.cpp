@@ -35,10 +35,15 @@ void test_pack_byte_layout(void) {
     TEST_ASSERT_EQUAL_UINT8(0x12, buf[4]);
 }
 
+void test_heartbeat_event_type(void) {
+    TEST_ASSERT_EQUAL(8, EVENT_HEARTBEAT);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_frame_size_and_constants);
     RUN_TEST(test_pack_unpack_round_trip);
     RUN_TEST(test_pack_byte_layout);
+    RUN_TEST(test_heartbeat_event_type);
     return UNITY_END();
 }
