@@ -32,7 +32,8 @@ choices: LEDC PWM output (not mozzi/ESP32Synth); minimal MIDI subset.
 
 ## Roles & environment
 
-Board: ESP32-C3-DevKitM-1 (leaf) / ESP32 (controller); Arduino framework.
+Board: ESP32-C3-DevKitM-1 (leaf; also the temporary controller this slice)
+/ ESP32 classic (final controller, not yet built); Arduino framework.
 
 - leaf (piezo/solenoid, GPIO configurable) · controller
 - Separate PlatformIO envs via `src_filter`; shared code in `lib/`.

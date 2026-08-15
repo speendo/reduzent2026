@@ -74,3 +74,7 @@ forwarded verbatim as the frame's channel byte.
 - Left/right pan mapping (low notes → left leaves, high notes → right): a
   spatialization effect tied to the 12-leaf layout; a natural bridge-side
   feature to discuss when planning the 12-leaf build.
+- Event-driven serial receive: replace the controller `loop()`'s `delay(1)`
+  polling with a UART/USB-CDC receive callback so it idles *and* reacts
+  immediately (drops the ~1 ms polling granularity). Board-dependent: classic
+  ESP32 → `Serial.onReceive(cb)`; ESP32-C3 (USB CDC) → `Serial.onEvent(ARDUINO_HW_CDC_RX_EVENT, cb)`.

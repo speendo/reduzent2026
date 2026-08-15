@@ -19,7 +19,7 @@ event-driven: no polling, minimal added latency, ~zero CPU when idle. Pass
 `--quiet` to skip the per-message console log on latency-critical runs.
 
 Usage:
-    pip install mido python-rtmidi pyserial
+    pip install -r tools/requirements.txt
     python3 tools/midi_bridge.py                 # interactive menu
     python3 tools/midi_bridge.py --list          # list ports and exit
     python3 tools/midi_bridge.py --config PATH   # use PATH as settings file
