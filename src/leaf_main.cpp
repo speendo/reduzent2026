@@ -99,6 +99,7 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
     uint32_t now = millis();
     switch (frame.type) {
         case EVENT_NOTE:
+            frame.note &= 0x7F; // clamp untrusted radio value to 0-127
             if (frame.value == 0) {
                 voice_note_off(&voices, frame.note, now);
             } else {
@@ -114,6 +115,7 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
             chan_pressure = frame.value;
             break;
         case EVENT_POLY_AFTERTOUCH:
+            frame.note &= 0x7F; // poly_pressure is a 128-entry table
             poly_pressure[frame.note] = frame.value;
             break;
         case EVENT_CC1_VIBRATO:
@@ -122,6 +124,12 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
         case EVENT_PROGRAM_CHANGE:
             // 0 = arpeggio (path A); 1 = 1-bit mixer (path B, next slice).
             render_path = (frame.value == 1) ? RENDER_1BIT : RENDER_ARPEGGIO;
+            if (render_path == RENDER_1BIT) {
+                // Path B leaves the piezo silent: kill any sounding note so
+                // LEDC does not keep its last frequency/duty humming.
+                arp_index = -1;
+                ledcWrite(PWM_CHANNEL, 0);
+            }
             break;
         case EVENT_PANIC:
             voice_table_init(&voices, &ENVELOPE_DEFAULT);
