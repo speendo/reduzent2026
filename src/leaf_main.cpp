@@ -6,6 +6,9 @@
 
 #include "espnow_frame.h"
 #include "note_freq.h"
+#include "envelope.h"
+#include "voice.h"
+#include "expression.h"
 
 #define MY_CHANNEL 0       // TODO: parasol config (later slice)
 #define PIEZO_PIN 2
@@ -16,37 +19,63 @@
 #define HEARTBEAT_MS 10000
 #define HEARTBEAT_JITTER_MS 1000
 
+#define ARP_TICK_MS 16     // ~60 Hz: arpeggio index + frequency retune
+#define PITCH_BEND_RANGE 2 // +/- semitones (leaf-spec default)
+
+// Render path seam: path A (arpeggio) is implemented here; path B (1-bit mixer)
+// is the next slice and reuses voice.h/envelope.h/expression.h unchanged.
+typedef enum { RENDER_ARPEGGIO = 0, RENDER_1BIT = 1 } render_path_t;
+
 static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-static uint8_t current_note = 0xFF;
-static bool note_active = false;
-static uint32_t last_note_millis = 0;  // 0 = never played (so value = uptime until first note)
+static voice_table_t voices;
+
+static render_path_t render_path = RENDER_ARPEGGIO;
+static uint16_t pitch_bend = PITCH_BEND_CENTER;
+static uint8_t chan_pressure = 127;      // 127 = full amplitude
+static uint8_t cc1_vibrato = 0;
+static uint8_t poly_pressure[128];       // per-note aftertouch, 127 = full
+
+static int arp_index = -1;               // current arpeggiated voice, -1 = none
+static uint32_t last_arp_ms = 0;
+
+static uint32_t last_note_millis = 0;    // 0 = never played
 static bool played_since_hb = false;
 
-static void note_on(uint8_t note, uint8_t velocity) {
-    current_note = note;
-    note_active = true;
-    last_note_millis = millis();
-    played_since_hb = true;
-    ledcChangeFrequency(PWM_CHANNEL, note_to_freq(note), PWM_RES);
-    ledcWrite(PWM_CHANNEL, (uint32_t)velocity << 1); // 7-bit -> 8-bit, max 254 < 256
-#if LEAF_DEBUG
-    Serial.printf("[%lu] on %d (%u Hz) vel %d\n", millis(), note, note_to_freq(note), velocity);
-#endif
+// Drive LEDC duty from a 0-127 amplitude, scaled by channel x poly aftertouch.
+static void set_duty(uint16_t level, uint8_t chan_p, uint8_t poly_p) {
+    uint8_t aftertouch = scale_level(chan_p, poly_p); // compose channel x poly
+    uint8_t scaled = scale_level((uint8_t)level, aftertouch);
+    ledcWrite(PWM_CHANNEL, (uint32_t)scaled << 1); // 7-bit -> 8-bit, max 254
 }
 
-static void note_off(uint8_t note) {
-    if (note != current_note) return; // monophonic: ignore offs for other notes
-    note_active = false;
-    current_note = 0xFF;
-    ledcWrite(PWM_CHANNEL, 0);
-#if LEAF_DEBUG
-    Serial.printf("[%lu] off %d\n", millis(), note);
-#endif
+// Path A: advance ADSR every control tick and keep duty on the arpeggiated voice.
+static void render_arpeggio_ctrl(uint32_t now_ms) {
+    voice_tick(&voices, now_ms);
+    if (arp_index >= 0 && voice_is_active(&voices.voices[arp_index])) {
+        voice_t* v = &voices.voices[arp_index];
+        set_duty(v->level, chan_pressure, poly_pressure[v->note]);
+    } else {
+        ledcWrite(PWM_CHANNEL, 0);
+    }
 }
 
-// Fire-and-forget liveness ping. `played` = did this leaf sound a note since
-// the last heartbeat; `value` = seconds since the last note (or boot).
+// Path A: advance the arpeggio index and retune LEDC frequency every ~16 ms.
+static void render_arpeggio_advance(uint32_t now_ms) {
+    int next = voice_arpeggio_step(&voices, arp_index);
+    if (next >= 0) {
+        arp_index = next;
+        voice_t* v = &voices.voices[arp_index];
+        int16_t cents = pitch_bend_cents(pitch_bend, PITCH_BEND_RANGE)
+                      + vibrato_cents(now_ms, cc1_vibrato);
+        uint16_t freq = cents_to_freq(note_to_freq(v->note), cents);
+        ledcChangeFrequency(PWM_CHANNEL, freq, PWM_RES);
+    } else {
+        arp_index = -1;
+        ledcWrite(PWM_CHANNEL, 0);
+    }
+}
+
 static void send_heartbeat() {
     uint8_t buf[ESP_NOW_FRAME_SIZE];
     espnow_frame_t frame;
@@ -67,13 +96,38 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
     espnow_frame_t frame;
     frame_unpack(data, &frame);
     if (frame.channel != MY_CHANNEL && frame.channel != ESP_NOW_CHANNEL_BROADCAST) return;
+
+    uint32_t now = millis();
     switch (frame.type) {
         case EVENT_NOTE:
-            if (frame.value == 0) note_off(frame.note);
-            else note_on(frame.note, frame.value);
+            if (frame.value == 0) {
+                voice_note_off(&voices, frame.note, now);
+            } else {
+                voice_note_on(&voices, frame.note, frame.value, now);
+                last_note_millis = now;
+                played_since_hb = true;
+            }
+            break;
+        case EVENT_PITCH_BEND:
+            pitch_bend = ((uint16_t)frame.value_hi << 7) | frame.value;
+            break;
+        case EVENT_CHANNEL_AFTERTOUCH:
+            chan_pressure = frame.value;
+            break;
+        case EVENT_POLY_AFTERTOUCH:
+            poly_pressure[frame.note] = frame.value;
+            break;
+        case EVENT_CC1_VIBRATO:
+            cc1_vibrato = frame.value;
+            break;
+        case EVENT_PROGRAM_CHANGE:
+            // 0 = arpeggio (path A); 1 = 1-bit mixer (path B, next slice).
+            render_path = (frame.value == 1) ? RENDER_1BIT : RENDER_ARPEGGIO;
             break;
         case EVENT_PANIC:
-            note_off(current_note);
+            voice_table_init(&voices, &ENVELOPE_DEFAULT);
+            arp_index = -1;
+            ledcWrite(PWM_CHANNEL, 0);
             break;
         default:
             break;
@@ -82,6 +136,10 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
 
 void setup() {
     Serial.begin(115200);
+    for (int i = 0; i < 128; i++) poly_pressure[i] = 127;
+
+    voice_table_init(&voices, &ENVELOPE_DEFAULT);
+
     ledcSetup(PWM_CHANNEL, 1000, PWM_RES);
     ledcAttachPin(PIEZO_PIN, PWM_CHANNEL);
     ledcWrite(PWM_CHANNEL, 0);
@@ -107,8 +165,18 @@ void setup() {
 }
 
 void loop() {
-    static uint32_t next_hb = 0; // first heartbeat fires immediately at boot
     uint32_t now = millis();
+
+    if (render_path == RENDER_ARPEGGIO) {
+        render_arpeggio_ctrl(now); // ADSR + duty every ~1 ms
+        if ((int32_t)(now - last_arp_ms) >= ARP_TICK_MS) {
+            last_arp_ms = now;
+            render_arpeggio_advance(now); // arpeggio + frequency every ~16 ms
+        }
+    }
+    // RENDER_1BIT is unimplemented until the next slice; the leaf stays silent.
+
+    static uint32_t next_hb = 0; // first heartbeat fires immediately at boot
     if ((int32_t)(now - next_hb) >= 0) {
         send_heartbeat();
         next_hb = now + HEARTBEAT_MS + (esp_random() % HEARTBEAT_JITTER_MS);
