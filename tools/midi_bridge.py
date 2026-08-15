@@ -154,6 +154,7 @@ def open_connections(midi_name, port, baud):
 
 
 def main() -> None:
+    import serial
     import serial.tools.list_ports
     import mido
 
@@ -207,7 +208,12 @@ def main() -> None:
                 except OSError:
                     if not write_error:
                         write_error = True
-                        print("serial write failed (is the serial port still connected?)", flush=True)
+                        print("serial write failed; will retry", flush=True)
+                    try:
+                        state["ser"] = None
+                        s.close()
+                    except OSError:
+                        pass
         if not quiet:
             print(cmd, flush=True)
 
@@ -221,6 +227,30 @@ def main() -> None:
     print(f"bridging {inport.name} -> {port} @ {baud}  (m = menu, s = settings, q = quit)")
     try:
         while True:
+            # Echo whatever the controller writes back (tx / send failed / hb).
+            with lock:
+                s = state["ser"]
+                if s is not None:
+                    try:
+                        data = s.read(256)
+                    except OSError:
+                        data = b""
+                    if data:
+                        sys.stdout.write(data.decode("utf-8", errors="replace"))
+                        sys.stdout.flush()
+
+            # Auto-reopen the serial port after a dropped connection.
+            if state["ser"] is None:
+                try:
+                    new_ser = serial.Serial(port, baud, timeout=0)
+                except OSError:
+                    pass
+                else:
+                    with lock:
+                        state["ser"] = new_ser
+                    write_error = False
+                    print(f"reconnected to {port}", flush=True)
+
             if not select.select([sys.stdin], [], [], 0.1)[0]:
                 continue
             ch = sys.stdin.read(1)
