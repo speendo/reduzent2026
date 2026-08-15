@@ -34,6 +34,21 @@ fire-and-forget — no acknowledgements.
 | CC1_VIBRATO         | target      | —    | depth               | piezo: vibrato depth                          |
 | PANIC               | 0xFF        | —    | —                   | all leaves: stop everything                   |
 | ENTER_SETTINGS      | 0xFF        | id  | —                   | enter settings mode; note = leaf id (0–254), 0xFF = all |
+| HEARTBEAT           | 0xFF        | 1/0 | secs since note     | leaf→controller liveness; controller logs `hb <mac> played=N last=Ns` |
+
+## Heartbeat (leaf → controller)
+
+- The only reverse traffic: every leaf broadcasts one `HEARTBEAT` frame every
+  10 s (±1 s random jitter) to the broadcast MAC — fire-and-forget, no acks.
+- Payload: `note` = 1 if the leaf played a note since its previous heartbeat
+  (set by `note_on`, i.e. a NOTE event with velocity > 0), else 0; `value` =
+  seconds since the last note played (saturates at 255; counts from boot until
+  the first note).
+- Identity is the sender MAC (implicit in ESP-NOW); a configured node id in
+  byte 0 (`channel`) is a later parasol slice.
+- Purpose: a heartbeat that stops means the leaf is dead/out of range; a
+  heartbeat whose `played` stays 0 while notes are being played means that
+  leaf's downlink is broken.
 
 ## Addressing & mapping
 
