@@ -75,6 +75,13 @@ static void render_arpeggio_advance(uint32_t now_ms) {
     }
 }
 
+static volatile int hb_tx_status = -1; // -1 = none, else esp_now_send_status_t
+
+static void on_send(const uint8_t* mac, esp_now_send_status_t status) {
+    (void)mac;
+    hb_tx_status = (int)status;
+}
+
 static void send_heartbeat() {
     uint8_t buf[ESP_NOW_FRAME_SIZE];
     espnow_frame_t frame;
@@ -85,7 +92,10 @@ static void send_heartbeat() {
     frame.value = (uint8_t)(secs > 255 ? 255 : secs);
     frame.value_hi = 0;
     frame_pack(&frame, buf);
-    esp_now_send(BROADCAST_MAC, buf, sizeof(buf));
+    esp_err_t err = esp_now_send(BROADCAST_MAC, buf, sizeof(buf));
+    if (err != ESP_OK) {
+        Serial.printf("hb esp_now_send err=%d\n", (int)err);
+    }
     played_since_hb = false;
 }
 
@@ -159,6 +169,7 @@ void setup() {
         return;
     }
     esp_now_register_recv_cb(on_recv);
+    esp_now_register_send_cb(on_send);
 
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, BROADCAST_MAC, 6);
@@ -187,6 +198,11 @@ void loop() {
     if ((int32_t)(now - next_hb) >= 0) {
         send_heartbeat();
         next_hb = now + HEARTBEAT_MS + (esp_random() % HEARTBEAT_JITTER_MS);
+    }
+    if (hb_tx_status >= 0) {
+        Serial.printf("hb tx %s\n",
+                      hb_tx_status == ESP_NOW_SEND_SUCCESS ? "ok" : "FAIL");
+        hb_tx_status = -1;
     }
     delay(1); // yield so the CPU idles instead of spinning
 }
