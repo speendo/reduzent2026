@@ -8,7 +8,7 @@
 #include "note_freq.h"
 
 #define MY_CHANNEL 0       // TODO: parasol config (later slice)
-#define PIEZO_PIN 2
+#define PIEZO_PIN 3
 #define PWM_CHANNEL 0
 #define PWM_RES 8
 #define ESP_NOW_CHANNEL 1  // fixed WiFi channel; must match the controller
