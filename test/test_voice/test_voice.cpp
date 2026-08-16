@@ -1,0 +1,143 @@
+#include <unity.h>
+#include "voice.h"
+
+void setUp(void) {}
+void tearDown(void) {}
+
+// Instant attack so voices reach full level on the first tick.
+static const envelope_params_t FAST = { 0, 1000, 1000, 100 };
+
+static void init(voice_table_t* vt) { voice_table_init(vt, &FAST); }
+
+void test_init_all_free(void) {
+    voice_table_t vt;
+    init(&vt);
+    TEST_ASSERT_EQUAL_UINT8(0, voice_active_count(&vt));
+}
+
+void test_note_on_claims_free_voice(void) {
+    voice_table_t vt;
+    init(&vt);
+    int idx = voice_note_on(&vt, 60, 100, 0);
+    TEST_ASSERT_EQUAL(0, idx);
+    TEST_ASSERT_EQUAL_UINT8(60, vt.voices[0].note);
+    TEST_ASSERT_EQUAL(ENV_STAGE_ATTACK, vt.voices[0].stage);
+    TEST_ASSERT_EQUAL_UINT32(0, vt.voices[0].phase);
+    TEST_ASSERT_EQUAL_UINT8(1, voice_active_count(&vt));
+}
+
+void test_note_on_zero_velocity_rejected(void) {
+    voice_table_t vt;
+    init(&vt);
+    TEST_ASSERT_EQUAL(-1, voice_note_on(&vt, 60, 0, 0));
+    TEST_ASSERT_EQUAL_UINT8(0, voice_active_count(&vt));
+}
+
+void test_note_off_sets_release(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    voice_tick(&vt, 0); // attack 0 -> decay, level 100
+    TEST_ASSERT_EQUAL(1, voice_note_off(&vt, 60, 0));
+    TEST_ASSERT_EQUAL(ENV_STAGE_RELEASE, vt.voices[0].stage);
+    TEST_ASSERT_EQUAL_UINT16(100, vt.voices[0].release_start);
+}
+
+void test_note_off_unknown_returns_zero(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    TEST_ASSERT_EQUAL(0, voice_note_off(&vt, 99, 0));
+}
+
+void test_retrigger_reuses_voice(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    voice_note_off(&vt, 60, 0);
+    int idx = voice_note_on(&vt, 60, 100, 100);
+    TEST_ASSERT_EQUAL(0, idx); // same slot, not a new voice
+    TEST_ASSERT_EQUAL(ENV_STAGE_ATTACK, vt.voices[0].stage);
+    TEST_ASSERT_EQUAL_UINT8(1, voice_active_count(&vt));
+}
+
+void test_steal_quietest(void) {
+    voice_table_t vt;
+    init(&vt);
+    for (int i = 0; i < MAX_VOICES; i++) voice_note_on(&vt, (uint8_t)(60 + i), 100, 0);
+    voice_tick(&vt, 0);      // all at level 100
+    vt.voices[5].level = 10; // make voice 5 the quietest
+    int idx = voice_note_on(&vt, 80, 100, 1000);
+    TEST_ASSERT_EQUAL(5, idx);
+    TEST_ASSERT_EQUAL_UINT8(80, vt.voices[5].note);
+}
+
+void test_steal_oldest_tiebreak(void) {
+    voice_table_t vt;
+    init(&vt);
+    for (int i = 0; i < MAX_VOICES; i++) {
+        voice_note_on(&vt, (uint8_t)(60 + i), 100, (uint32_t)(100 * i));
+    }
+    voice_tick(&vt, 0);
+    for (int i = 0; i < MAX_VOICES; i++) vt.voices[i].level = 50; // equal levels
+    int idx = voice_note_on(&vt, 80, 100, 5000);
+    TEST_ASSERT_EQUAL(0, idx); // voice 0 has oldest born_ms
+}
+
+void test_tick_frees_released_voice(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    voice_tick(&vt, 0);         // -> level 100
+    voice_note_off(&vt, 60, 0); // release_start 100, release 1000ms
+    voice_tick(&vt, 100);
+    TEST_ASSERT_EQUAL(ENV_STAGE_RELEASE, vt.voices[0].stage);
+    voice_tick(&vt, 1100);      // elapsed >= 1000 -> idle
+    TEST_ASSERT_EQUAL(ENV_STAGE_IDLE, vt.voices[0].stage);
+    TEST_ASSERT_EQUAL_UINT8(VOICE_FREE_NOTE, vt.voices[0].note);
+    TEST_ASSERT_EQUAL_UINT8(0, voice_active_count(&vt));
+}
+
+void test_arpeggio_step(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    voice_note_on(&vt, 64, 100, 0);
+    voice_note_on(&vt, 67, 100, 0);
+    TEST_ASSERT_EQUAL(0, voice_arpeggio_step(&vt, -1));
+    TEST_ASSERT_EQUAL(1, voice_arpeggio_step(&vt, 0));
+    TEST_ASSERT_EQUAL(2, voice_arpeggio_step(&vt, 1));
+    TEST_ASSERT_EQUAL(0, voice_arpeggio_step(&vt, 2));
+}
+
+void test_arpeggio_step_empty(void) {
+    voice_table_t vt;
+    init(&vt);
+    TEST_ASSERT_EQUAL(-1, voice_arpeggio_step(&vt, -1));
+}
+
+void test_active_count(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    voice_note_on(&vt, 64, 100, 0);
+    voice_note_on(&vt, 67, 100, 0);
+    TEST_ASSERT_EQUAL_UINT8(3, voice_active_count(&vt));
+}
+
+int main(void) {
+    UNITY_BEGIN();
+    RUN_TEST(test_init_all_free);
+    RUN_TEST(test_note_on_claims_free_voice);
+    RUN_TEST(test_note_on_zero_velocity_rejected);
+    RUN_TEST(test_note_off_sets_release);
+    RUN_TEST(test_note_off_unknown_returns_zero);
+    RUN_TEST(test_retrigger_reuses_voice);
+    RUN_TEST(test_steal_quietest);
+    RUN_TEST(test_steal_oldest_tiebreak);
+    RUN_TEST(test_tick_frees_released_voice);
+    RUN_TEST(test_arpeggio_step);
+    RUN_TEST(test_arpeggio_step_empty);
+    RUN_TEST(test_active_count);
+    return UNITY_END();
+}

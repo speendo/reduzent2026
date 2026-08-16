@@ -129,3 +129,6 @@ range; (solenoid) hold duration + velocity table.
     percussion instrument, and a receive-only leaf must wake on packet anyway
     (radio can't fully sleep without jitter on every note). Needs a proper
     wake-on-packet design; configurable duration should be a parasol setting.
+- Path B (1-bit 32 kHz mixer) — next slice; path A (LEDC + arpeggio) is
+  implemented as of the polyphony slice. The voice table + envelope + expression
+  headers are render-agnostic and reused unchanged by path B.
