@@ -153,6 +153,37 @@ def open_connections(midi_name, port, baud):
     return mido.open_input(midi_name), serial.Serial(port, baud, timeout=0)
 
 
+def setup_scroll_region(bottom: int) -> None:
+    """Reserve `bottom` lines at the terminal bottom for the status bar."""
+    rows = os.get_terminal_size().lines
+    sys.stdout.write(f"\033[1;{rows - bottom}r")
+    sys.stdout.flush()
+
+
+def reset_scroll_region() -> None:
+    """Restore full terminal scroll region."""
+    sys.stdout.write("\033[r")
+    sys.stdout.flush()
+
+
+def draw_status(midi_name: str, port: str, baud: int,
+                override_ch: Optional[int], override_inst: Optional[int]) -> None:
+    """Redraw the two-line status bar at the terminal bottom."""
+    rows = os.get_terminal_size().lines
+    ch_display = str(override_ch) if override_ch is not None else "0"
+    ch_mode = "(override)" if override_ch is not None else "(MIDI)"
+    inst_display = str(override_inst) if override_inst is not None else "--"
+    line1 = f" \033[1;36m\u25b8\033[0m USB MIDI Keyboard \u2192 {port} @ {baud}"
+    line2 = (
+        f" \033[1;36m\u25b8\033[0m ch: {ch_display} {ch_mode}  "
+        f"inst: {inst_display}   "
+        f"m menu  s settings  c ch  i inst  q quit"
+    )
+    sys.stdout.write(f"\033[{rows - 1};1H\033[2K{line1}")
+    sys.stdout.write(f"\033[{rows};1H\033[2K{line2}")
+    sys.stdout.flush()
+
+
 def main() -> None:
     import serial
     import serial.tools.list_ports
@@ -194,6 +225,8 @@ def main() -> None:
     lock = threading.Lock()
     state = {"ser": ser}
     write_error = False
+    override_ch = None
+    override_inst = None
 
     def on_message(msg):
         nonlocal write_error
@@ -225,7 +258,8 @@ def main() -> None:
     old = termios.tcgetattr(fd)
     tty.setraw(fd)
 
-    print(f"bridging {inport.name} -> {port} @ {baud}  (m = menu, s = settings, q = quit)")
+    setup_scroll_region(2)
+    draw_status(midi_name, port, baud, override_ch, override_inst)
     try:
         while True:
             # Echo whatever the controller writes back (tx / send failed / hb).
@@ -253,9 +287,18 @@ def main() -> None:
                     print(f"reconnected to {port}", flush=True)
 
             if not select.select([sys.stdin], [], [], 0.1)[0]:
+                # Redraw status bar every ~2 seconds to stay visible
+                if not hasattr(main, '_last_status_redraw'):
+                    main._last_status_redraw = 0
+                import time
+                now = time.monotonic()
+                if now - main._last_status_redraw >= 2.0:
+                    draw_status(midi_name, port, baud, override_ch, override_inst)
+                    main._last_status_redraw = now
                 continue
             ch = sys.stdin.read(1)
             if ch in ("\x03", "q", "Q"):
+                reset_scroll_region()
                 break
             if ch in ("m", "M"):
                 # Restore canonical mode so the menu's input() works.
@@ -288,7 +331,7 @@ def main() -> None:
                                 "serial_port": port,
                                 "baud": baud,
                             })
-                            print(f"bridging {inport.name} -> {port} @ {baud}")
+                            draw_status(midi_name, port, baud, override_ch, override_inst)
                 finally:
                     tty.setraw(fd)
             if ch in ("s", "S"):
@@ -308,8 +351,35 @@ def main() -> None:
                     s = state["ser"]
                     if s is not None:
                         s.write(cmd.encode())
-                if not quiet:
-                    print("settings", flush=True)
+                draw_status(midi_name, port, baud, override_ch, override_inst)
+            if ch in ("c", "C"):
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                try:
+                    raw = input("Channel [0-15, empty=reset]: ").strip()
+                finally:
+                    tty.setraw(fd)
+                if raw:
+                    try:
+                        override_ch = int(raw) % 16
+                    except ValueError:
+                        pass
+                else:
+                    override_ch = None
+                draw_status(midi_name, port, baud, override_ch, override_inst)
+            if ch in ("i", "I"):
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                try:
+                    raw = input("Instrument [0-127, empty=reset]: ").strip()
+                finally:
+                    tty.setraw(fd)
+                if raw:
+                    try:
+                        override_inst = int(raw) % 128
+                    except ValueError:
+                        pass
+                else:
+                    override_inst = None
+                draw_status(midi_name, port, baud, override_ch, override_inst)
     except KeyboardInterrupt:
         pass
     finally:
@@ -318,6 +388,7 @@ def main() -> None:
             state["ser"] = None
             ser.close()
         inport.close()
+        reset_scroll_region()
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
