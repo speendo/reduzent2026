@@ -131,9 +131,9 @@ static void enter_1bit(void) {
     ledcDetachPin(PIEZO_PIN);
     pinMode(PIEZO_PIN, OUTPUT);
     digitalWrite(PIEZO_PIN, 0);
-    mix_timer = timerBegin(0, 1, true);        // 80 MHz APB tick (C3)
-    timerAttachInterrupt(mix_timer, &on_mixer_sample, true);
-    timerAlarmWrite(mix_timer, 2500, true);    // 80e6 / 2500 = 32 kHz
+    mix_timer = timerBegin(0, 2, true);        // 80 MHz APB / 2 = 40 MHz tick (C3)
+    timerAttachInterrupt(mix_timer, &on_mixer_sample, false);
+    timerAlarmWrite(mix_timer, 1250, true);    // 40e6 / 1250 = 32 kHz
     timerAlarmEnable(mix_timer);
 }
 
