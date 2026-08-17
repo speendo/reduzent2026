@@ -62,10 +62,17 @@ class TestMidiToCommand(unittest.TestCase):
         m = mido.Message("control_change", channel=7, control=1, value=50)
         self.assertEqual(midi_to_command(m), "v 7 50")
 
-    def test_cc_panic(self):
-        for cc in (120, 121, 123):
-            m = mido.Message("control_change", channel=0, control=cc, value=0)
-            self.assertEqual(midi_to_command(m), "panic", f"cc{cc}")
+    def test_cc120_panic_channel(self):
+        m = mido.Message("control_change", channel=3, control=120, value=0)
+        self.assertEqual(midi_to_command(m), "panic 3")
+
+    def test_cc121_resetcc(self):
+        m = mido.Message("control_change", channel=4, control=121, value=0)
+        self.assertEqual(midi_to_command(m), "resetcc 4")
+
+    def test_cc123_noff(self):
+        m = mido.Message("control_change", channel=5, control=123, value=0)
+        self.assertEqual(midi_to_command(m), "noff 5")
 
     def test_other_cc_ignored(self):
         m = mido.Message("control_change", channel=0, control=7, value=64)

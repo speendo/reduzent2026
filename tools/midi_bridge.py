@@ -67,8 +67,12 @@ def midi_to_command(msg) -> Optional[str]:
     if t == "control_change":
         if msg.control == 1:
             return f"v {msg.channel} {msg.value}"
-        if msg.control in (120, 121, 123):
-            return "panic"
+        if msg.control == 120:
+            return f"panic {msg.channel}"
+        if msg.control == 121:
+            return f"resetcc {msg.channel}"
+        if msg.control == 123:
+            return f"noff {msg.channel}"
     return None
 
 
@@ -178,7 +182,7 @@ def draw_status(midi_name: str, port: str, baud: int,
     line2 = (
         f" \033[1;36m\u25b8\033[0m ch: \033[1;32m{ch_display}\033[0m {ch_mode}  "
         f"inst: \033[1;32m{inst_display}\033[0m   "
-        f"\033[2mm menu  s settings  c ch  i inst  q quit\033[0m"
+        f"\033[2mm menu  s settings  c ch  i inst  p panic  o noff  q quit\033[0m"
     )
     ctx = lock if lock else _noop_ctx()
     with ctx:
@@ -242,12 +246,16 @@ def main() -> None:
     write_error = False
     override_ch = None
     override_inst = None
+    last_channel = None
 
     def on_message(msg):
         nonlocal write_error
+        nonlocal last_channel
         cmd = midi_to_command(msg)
         if cmd is None:
             return
+        if msg.type in ("note_on", "note_off"):
+            last_channel = msg.channel
         if override_ch is not None or override_inst is not None:
             parts = cmd.split()
             if override_ch is not None:
@@ -431,6 +439,22 @@ def main() -> None:
                 else:
                     override_inst = None
                 draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
+            if ch in ("p", "P"):
+                with lock:
+                    s = state["ser"]
+                    if s is not None:
+                        s.write(b"panic\n")
+            if ch in ("o", "O"):
+                target = override_ch if override_ch is not None else last_channel
+                if target is None:
+                    with stdout_lock:
+                        sys.stdout.write("no active channel to silence\r\n")
+                        sys.stdout.flush()
+                else:
+                    with lock:
+                        s = state["ser"]
+                        if s is not None:
+                            s.write(f"noff {target}\n".encode())
     except KeyboardInterrupt:
         pass
     finally:
