@@ -167,7 +167,8 @@ def reset_scroll_region() -> None:
 
 
 def draw_status(midi_name: str, port: str, baud: int,
-                override_ch: Optional[int], override_inst: Optional[int]) -> None:
+                override_ch: Optional[int], override_inst: Optional[int],
+                lock: Optional[threading.Lock] = None) -> None:
     """Redraw the two-line status bar at the terminal bottom."""
     rows = os.get_terminal_size().lines
     ch_display = str(override_ch) if override_ch is not None else "0"
@@ -179,9 +180,21 @@ def draw_status(midi_name: str, port: str, baud: int,
         f"inst: {inst_display}   "
         f"m menu  s settings  c ch  i inst  q quit"
     )
-    sys.stdout.write(f"\033[{rows - 1};1H\033[2K{line1}")
-    sys.stdout.write(f"\033[{rows};1H\033[2K{line2}")
-    sys.stdout.flush()
+    ctx = lock if lock else _noop_ctx()
+    with ctx:
+        sys.stdout.write("\033[s")  # save cursor
+        sys.stdout.write(f"\033[{rows - 1};1H\033[2K{line1}")
+        sys.stdout.write(f"\033[{rows};1H\033[2K{line2}")
+        sys.stdout.write("\033[u")  # restore cursor
+        sys.stdout.flush()
+
+
+class _noop_ctx:
+    """Null context manager for when no lock is provided."""
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        pass
 
 
 def main() -> None:
@@ -224,6 +237,7 @@ def main() -> None:
     # holds the live serial port so the `m` key can swap it without racing the
     # callback thread.
     lock = threading.Lock()
+    stdout_lock = threading.Lock()
     state = {"ser": ser}
     write_error = False
     override_ch = None
@@ -252,16 +266,18 @@ def main() -> None:
                 except OSError:
                     if not write_error:
                         write_error = True
-                        sys.stdout.write("serial write failed; will retry\r\n")
-                        sys.stdout.flush()
+                        with stdout_lock:
+                            sys.stdout.write("serial write failed; will retry\r\n")
+                            sys.stdout.flush()
                     try:
                         state["ser"] = None
                         s.close()
                     except OSError:
                         pass
         if not quiet:
-            sys.stdout.write(cmd + "\r\n")
-            sys.stdout.flush()
+            with stdout_lock:
+                sys.stdout.write(cmd + "\r\n")
+                sys.stdout.flush()
 
     inport.callback = on_message
 
@@ -272,7 +288,7 @@ def main() -> None:
 
     last_redraw = 0
     setup_scroll_region(2)
-    draw_status(midi_name, port, baud, override_ch, override_inst)
+    draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
     try:
         while True:
             # Echo whatever the controller writes back (tx / send failed / hb).
@@ -287,8 +303,9 @@ def main() -> None:
                         text = data.decode("utf-8", errors="replace")
                         if text.startswith("hb "):
                             text = f"\033[2;36m{text}\033[0m"
-                        sys.stdout.write(text)
-                        sys.stdout.flush()
+                        with stdout_lock:
+                            sys.stdout.write(text)
+                            sys.stdout.flush()
 
             # Auto-reopen the serial port after a dropped connection.
             if state["ser"] is None:
@@ -300,13 +317,14 @@ def main() -> None:
                     with lock:
                         state["ser"] = new_ser
                     write_error = False
-                    sys.stdout.write(f"reconnected to {port}\r\n")
-                    sys.stdout.flush()
+                    with stdout_lock:
+                        sys.stdout.write(f"reconnected to {port}\r\n")
+                        sys.stdout.flush()
 
             if not select.select([sys.stdin], [], [], 0.1)[0]:
                 now = time.monotonic()
                 if now - last_redraw >= 2.0:
-                    draw_status(midi_name, port, baud, override_ch, override_inst)
+                    draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
                     last_redraw = now
                 continue
             ch = sys.stdin.read(1)
@@ -344,7 +362,7 @@ def main() -> None:
                                 "serial_port": port,
                                 "baud": baud,
                             })
-                            draw_status(midi_name, port, baud, override_ch, override_inst)
+                            draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
                 finally:
                     tty.setraw(fd)
             if ch in ("s", "S"):
@@ -364,7 +382,7 @@ def main() -> None:
                     s = state["ser"]
                     if s is not None:
                         s.write(cmd.encode())
-                draw_status(midi_name, port, baud, override_ch, override_inst)
+                draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
             if ch in ("c", "C"):
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
                 try:
@@ -382,7 +400,7 @@ def main() -> None:
                         print("invalid input")
                 else:
                     override_ch = None
-                draw_status(midi_name, port, baud, override_ch, override_inst)
+                draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
             if ch in ("i", "I"):
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
                 try:
@@ -405,7 +423,7 @@ def main() -> None:
                         print("invalid input")
                 else:
                     override_inst = None
-                draw_status(midi_name, port, baud, override_ch, override_inst)
+                draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
     except KeyboardInterrupt:
         pass
     finally:
