@@ -174,11 +174,11 @@ def draw_status(midi_name: str, port: str, baud: int,
     ch_display = str(override_ch) if override_ch is not None else "0"
     ch_mode = "(override)" if override_ch is not None else "(MIDI)"
     inst_display = str(override_inst) if override_inst is not None else "--"
-    line1 = f" \033[1;36m\u25b8\033[0m USB MIDI Keyboard \u2192 {port} @ {baud}"
+    line1 = f" \033[1;36m\u25b8\033[0m USB MIDI Keyboard \u2192 \033[1;37m{port}\033[0m @ \033[1;37m{baud}\033[0m"
     line2 = (
-        f" \033[1;36m\u25b8\033[0m ch: {ch_display} {ch_mode}  "
-        f"inst: {inst_display}   "
-        f"m menu  s settings  c ch  i inst  q quit"
+        f" \033[1;36m\u25b8\033[0m ch: \033[1;37m{ch_display}\033[0m {ch_mode}  "
+        f"inst: \033[1;37m{inst_display}\033[0m   "
+        f"\033[2mm menu  s settings  c ch  i inst  q quit\033[0m"
     )
     ctx = lock if lock else _noop_ctx()
     with ctx:
