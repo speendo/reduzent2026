@@ -22,6 +22,7 @@
 
 #define ARP_TICK_MS 16     // ~60 Hz: arpeggio index + frequency retune
 #define PITCH_BEND_RANGE 2 // +/- semitones (leaf-spec default)
+#define STUCK_NOTE_TIMEOUT_MS 3000
 
 // Render paths: A = LEDC arpeggio, B = 1-bit 32 kHz mixer, M = LEDC monophonic.
 typedef enum { RENDER_ARPEGGIO = 0, RENDER_1BIT = 1, RENDER_MONO = 2 } render_path_t;
@@ -213,6 +214,19 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
             set_render_path(next);
             break;
         }
+        case EVENT_NOTE_HOLD:
+            frame.note &= 0x7F;
+            voice_note_hold(&voices, frame.note, frame.value, now);
+            break;
+        case EVENT_NOTES_OFF:
+            voice_all_notes_off(&voices, now);
+            break;
+        case EVENT_RESET_CONTROLLERS:
+            pitch_bend = PITCH_BEND_CENTER;
+            cc1_vibrato = 0;
+            chan_pressure = 127;
+            for (int i = 0; i < 128; i++) poly_pressure[i] = 127;
+            break;
         case EVENT_PANIC:
             voice_table_init(&voices, &ENVELOPE_DEFAULT);
             arp_index = -1;
@@ -256,6 +270,8 @@ void setup() {
 
 void loop() {
     uint32_t now = millis();
+
+    voice_watchdog(&voices, now, STUCK_NOTE_TIMEOUT_MS);
 
     if (render_path == RENDER_ARPEGGIO) {
         render_arpeggio_ctrl(now); // ADSR + duty every ~1 ms
