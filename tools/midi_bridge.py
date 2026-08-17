@@ -287,6 +287,7 @@ def main() -> None:
     tty.setraw(fd)
 
     last_redraw = 0
+    serial_buf = ""
     setup_scroll_region(2)
     draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
     try:
@@ -300,14 +301,18 @@ def main() -> None:
                     except OSError:
                         data = b""
                     if data:
-                        text = data.decode("utf-8", errors="replace")
-                        # Raw mode needs \r\n; controller sends \n only
-                        text = text.replace("\n", "\r\n")
-                        if text.startswith("hb "):
-                            text = f"\033[2;36m{text}\033[0m"
-                        with stdout_lock:
-                            sys.stdout.write(text)
-                            sys.stdout.flush()
+                        serial_buf += data.decode("utf-8", errors="replace")
+                        # Write only complete lines (ending with \n).
+                        # Partial lines stay in the buffer until next read.
+                        while "\n" in serial_buf:
+                            line, serial_buf = serial_buf.split("\n", 1)
+                            # Raw mode needs \r\n; controller sends \n only
+                            out = line + "\r\n"
+                            if out.startswith("hb "):
+                                out = f"\033[2;36m{out}\033[0m"
+                            with stdout_lock:
+                                sys.stdout.write(out)
+                                sys.stdout.flush()
 
             # Auto-reopen the serial port after a dropped connection.
             if state["ser"] is None:
@@ -435,6 +440,9 @@ def main() -> None:
             ser.close()
         inport.close()
         reset_scroll_region()
+        # Clear screen and restore cursor to top-left on exit
+        sys.stdout.write("\033[2J\033[1;1H")
+        sys.stdout.flush()
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
