@@ -125,6 +125,66 @@ void test_active_count(void) {
     TEST_ASSERT_EQUAL_UINT8(3, voice_active_count(&vt));
 }
 
+// --- monophonic selector (voice_mono_current) tests ---
+
+// Put a voice into a deterministic "held" state without envelope timing.
+static void set_held(voice_t* v, uint8_t note, uint32_t born) {
+    v->note = note;
+    v->velocity = 100;
+    v->stage = ENV_STAGE_SUSTAIN;
+    v->level = 100;
+    v->release_start = 0;
+    v->phase = 0;
+    v->stage_start_ms = 0;
+    v->born_ms = born;
+}
+
+void test_mono_current_empty(void) {
+    voice_table_t vt;
+    init(&vt);
+    TEST_ASSERT_EQUAL(-1, voice_mono_current(&vt));
+}
+
+void test_mono_current_single_held(void) {
+    voice_table_t vt;
+    init(&vt);
+    set_held(&vt.voices[0], 60, 100);
+    TEST_ASSERT_EQUAL(0, voice_mono_current(&vt));
+}
+
+void test_mono_current_last_pressed_wins(void) {
+    voice_table_t vt;
+    init(&vt);
+    set_held(&vt.voices[0], 60, 100);
+    set_held(&vt.voices[1], 64, 200);
+    TEST_ASSERT_EQUAL(1, voice_mono_current(&vt));
+}
+
+void test_mono_current_falls_back_on_release(void) {
+    voice_table_t vt;
+    init(&vt);
+    set_held(&vt.voices[0], 60, 100);
+    set_held(&vt.voices[1], 64, 200);
+    vt.voices[1].stage = ENV_STAGE_RELEASE; // top note released
+    TEST_ASSERT_EQUAL(0, voice_mono_current(&vt)); // falls back to held v0
+}
+
+void test_mono_current_release_tail(void) {
+    voice_table_t vt;
+    init(&vt);
+    set_held(&vt.voices[0], 60, 100);
+    vt.voices[0].stage = ENV_STAGE_RELEASE; // nothing held, one releasing
+    TEST_ASSERT_EQUAL(0, voice_mono_current(&vt)); // release tail still selected
+}
+
+void test_mono_current_all_idle(void) {
+    voice_table_t vt;
+    init(&vt);
+    set_held(&vt.voices[0], 60, 100);
+    vt.voices[0].stage = ENV_STAGE_IDLE;
+    TEST_ASSERT_EQUAL(-1, voice_mono_current(&vt));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_init_all_free);
@@ -139,5 +199,11 @@ int main(void) {
     RUN_TEST(test_arpeggio_step);
     RUN_TEST(test_arpeggio_step_empty);
     RUN_TEST(test_active_count);
+    RUN_TEST(test_mono_current_empty);
+    RUN_TEST(test_mono_current_single_held);
+    RUN_TEST(test_mono_current_last_pressed_wins);
+    RUN_TEST(test_mono_current_falls_back_on_release);
+    RUN_TEST(test_mono_current_release_tail);
+    RUN_TEST(test_mono_current_all_idle);
     return UNITY_END();
 }

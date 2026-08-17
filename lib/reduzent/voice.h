@@ -137,4 +137,25 @@ static inline int voice_arpeggio_step(const voice_table_t* vt, int from) {
     return -1;
 }
 
+// Monophonic "current voice" (last-note-wins with release fallback).
+// Among held voices (active, not RELEASE), return the most recently pressed
+// (max born_ms). If none are held, return the most recently pressed RELEASE
+// voice so the final note rings its tail. Returns -1 if no active voice.
+static inline int voice_mono_current(const voice_table_t* vt) {
+    int best = -1;
+    uint32_t best_born = 0;
+    for (int i = 0; i < MAX_VOICES; i++) {
+        const voice_t* v = &vt->voices[i];
+        if (v->stage == ENV_STAGE_IDLE || v->stage == ENV_STAGE_RELEASE) continue;
+        if (v->born_ms >= best_born) { best = i; best_born = v->born_ms; }
+    }
+    if (best >= 0) return best;
+    for (int i = 0; i < MAX_VOICES; i++) {
+        const voice_t* v = &vt->voices[i];
+        if (v->stage != ENV_STAGE_RELEASE) continue;
+        if (v->born_ms >= best_born) { best = i; best_born = v->born_ms; }
+    }
+    return best;
+}
+
 #endif
