@@ -281,7 +281,10 @@ def main() -> None:
                     except OSError:
                         data = b""
                     if data:
-                        sys.stdout.write(data.decode("utf-8", errors="replace"))
+                        text = data.decode("utf-8", errors="replace")
+                        if text.startswith("hb "):
+                            text = f"\033[2;36m{text}\033[0m"
+                        sys.stdout.write(text)
                         sys.stdout.flush()
 
             # Auto-reopen the serial port after a dropped connection.
