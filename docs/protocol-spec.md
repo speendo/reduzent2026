@@ -32,7 +32,10 @@ fire-and-forget — no acknowledgements.
 | POLY_AFTERTOUCH     | target      | yes  | pressure            | piezo: per-note amplitude                     |
 | PROGRAM_CHANGE      | target      | —    | program             | piezo: select mode (0 = arpeggio, 1 = 1-bit, 2 = monophonic) |
 | CC1_VIBRATO         | target      | —    | depth               | piezo: vibrato depth                          |
-| PANIC               | 0xFF        | —    | —                   | all leaves: stop everything                   |
+| PANIC               | 0xFF / 0–15 | —    | —                   | hard stop: all leaves (0xFF) or one channel   |
+| NOTE_HOLD           | target      | yes  | velocity            | piezo: refresh held note or (re)start it      |
+| NOTES_OFF           | 0xFF / 0–15 | —    | —                   | release all notes on scope (tails ring)       |
+| RESET_CONTROLLERS   | 0xFF / 0–15 | —    | —                   | pitch bend → center, vibrato → 0, aftertouch → full |
 | ENTER_SETTINGS      | 0xFF        | id  | —                   | enter settings mode; note = leaf id (0–254), 0xFF = all |
 | HEARTBEAT           | 0xFF        | 1/0 | secs since note     | leaf→controller liveness; controller logs `hb <mac> played=N last=Ns` |
 
@@ -78,6 +81,19 @@ fire-and-forget — no acknowledgements.
 
 - Fire-and-forget keeps end-to-end ~1–5 ms; frame size is not the driver
   (channel contention is). See docs/research-notes.md.
+
+## Reliability (keepalive + watchdog)
+
+- The controller tracks held notes (per channel + note) and re-affirms each via
+  a `NOTE_HOLD` event every 750 ms (`X / Y`; `X = 3000 ms`, `Y = 4`).
+- A piezo leaf auto-releases any voice stuck in SUSTAIN for `X` ms without a
+  refresh. A dropped note-off is therefore released within ~`X` ms; a held note
+  is continuously re-affirmed and never cut.
+- `NOTE_HOLD` also (re)starts a missing note, self-healing a dropped note-on.
+  Solenoid leaves ignore `NOTE_HOLD`.
+- `PANIC` (hard) and `NOTES_OFF` (release) are sent three times by the
+  controller so a "silence" command is not itself lost; both clear the
+  controller's held-note table for their scope.
 
 ## Backlog
 

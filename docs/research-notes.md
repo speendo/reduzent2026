@@ -71,6 +71,14 @@ Latency: payload size is not the driver (3 → 7 bytes costs ~30 µs on air);
 channel contention and retries dominate. **Fire-and-forget (no acks)** is the
 single most important latency decision. End-to-end target ~1–5 ms.
 
+Reliability (2026-08-17): the fire-and-forget link drops frames, and a dropped
+note-off leaves a note stuck in SUSTAIN. Resolution: a controller keepalive
+(`NOTE_HOLD` every 750 ms) plus a leaf watchdog that releases a SUSTAIN voice
+not refreshed within 3 s. Panic is hard-stop, `NOTES_OFF` is release; both are
+channel-scoped and sent redundantly. MIDI CC120/121/123 map to hard-stop /
+reset-controllers / release respectively. See
+`docs/superpowers/specs/2026-08-17-espnow-reliability-design.md`.
+
 ## 4. Polyphony (piezo)
 
 **Decision: simulated ADSR + polyphony via two runtime-selectable modes.**
