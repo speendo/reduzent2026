@@ -187,6 +187,7 @@ def draw_status(midi_name: str, port: str, baud: int,
 def main() -> None:
     import serial
     import serial.tools.list_ports
+    import time
     import mido
 
     argv = sys.argv[1:]
@@ -251,7 +252,8 @@ def main() -> None:
                 except OSError:
                     if not write_error:
                         write_error = True
-                        print("serial write failed; will retry", flush=True)
+                        sys.stdout.write("serial write failed; will retry\r\n")
+                        sys.stdout.flush()
                     try:
                         state["ser"] = None
                         s.close()
@@ -268,6 +270,7 @@ def main() -> None:
     old = termios.tcgetattr(fd)
     tty.setraw(fd)
 
+    last_redraw = 0
     setup_scroll_region(2)
     draw_status(midi_name, port, baud, override_ch, override_inst)
     try:
@@ -297,17 +300,14 @@ def main() -> None:
                     with lock:
                         state["ser"] = new_ser
                     write_error = False
-                    print(f"reconnected to {port}", flush=True)
+                    sys.stdout.write(f"reconnected to {port}\r\n")
+                    sys.stdout.flush()
 
             if not select.select([sys.stdin], [], [], 0.1)[0]:
-                # Redraw status bar every ~2 seconds to stay visible
-                if not hasattr(main, '_last_status_redraw'):
-                    main._last_status_redraw = 0
-                import time
                 now = time.monotonic()
-                if now - main._last_status_redraw >= 2.0:
+                if now - last_redraw >= 2.0:
                     draw_status(midi_name, port, baud, override_ch, override_inst)
-                    main._last_status_redraw = now
+                    last_redraw = now
                 continue
             ch = sys.stdin.read(1)
             if ch in ("\x03", "q", "Q"):
@@ -373,9 +373,13 @@ def main() -> None:
                     tty.setraw(fd)
                 if raw:
                     try:
-                        override_ch = int(raw) % 16
+                        val = int(raw)
+                        if 0 <= val <= 15:
+                            override_ch = val
+                        else:
+                            print("channel must be 0-15")
                     except ValueError:
-                        pass
+                        print("invalid input")
                 else:
                     override_ch = None
                 draw_status(midi_name, port, baud, override_ch, override_inst)
@@ -387,14 +391,18 @@ def main() -> None:
                     tty.setraw(fd)
                 if raw:
                     try:
-                        override_inst = int(raw) % 128
+                        val = int(raw)
+                        if 0 <= val <= 127:
+                            override_inst = val
+                            # Send program change immediately to all leaves
+                            with lock:
+                                s = state["ser"]
+                                if s is not None:
+                                    s.write(f"g {override_ch if override_ch is not None else 0} {override_inst}\n".encode())
+                        else:
+                            print("program must be 0-127")
                     except ValueError:
-                        pass
-                    else:
-                        with lock:
-                            s = state["ser"]
-                            if s is not None:
-                                s.write(f"g {override_ch or 0} {override_inst}\n".encode())
+                        print("invalid input")
                 else:
                     override_inst = None
                 draw_status(midi_name, port, baud, override_ch, override_inst)
