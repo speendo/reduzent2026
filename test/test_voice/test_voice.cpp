@@ -185,6 +185,70 @@ void test_mono_current_all_idle(void) {
     TEST_ASSERT_EQUAL(-1, voice_mono_current(&vt));
 }
 
+void test_note_on_sets_hold_refresh(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 500);
+    TEST_ASSERT_EQUAL_UINT32(500, vt.voices[0].hold_refresh_ms);
+}
+
+void test_note_hold_refreshes_active(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    int idx = voice_note_hold(&vt, 60, 100, 1000);
+    TEST_ASSERT_EQUAL(0, idx);
+    TEST_ASSERT_EQUAL_UINT32(1000, vt.voices[0].hold_refresh_ms);
+    TEST_ASSERT_EQUAL(ENV_STAGE_ATTACK, vt.voices[0].stage); // refreshed, not re-attacked
+}
+
+void test_note_hold_starts_missing(void) {
+    voice_table_t vt;
+    init(&vt);
+    int idx = voice_note_hold(&vt, 60, 100, 1000);
+    TEST_ASSERT_EQUAL(0, idx);
+    TEST_ASSERT_EQUAL_UINT8(60, vt.voices[0].note);
+    TEST_ASSERT_EQUAL_UINT8(1, voice_active_count(&vt));
+}
+
+void test_watchdog_releases_stuck_sustain(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    voice_tick(&vt, 0);     // attack 0 -> decay
+    voice_tick(&vt, 1000);  // decay 1000 -> sustain
+    TEST_ASSERT_EQUAL(ENV_STAGE_SUSTAIN, vt.voices[0].stage);
+    voice_watchdog(&vt, 0, 3000);    // 0ms elapsed < 3000
+    TEST_ASSERT_EQUAL(ENV_STAGE_SUSTAIN, vt.voices[0].stage);
+    voice_watchdog(&vt, 3000, 3000); // 3000ms elapsed >= 3000
+    TEST_ASSERT_EQUAL(ENV_STAGE_RELEASE, vt.voices[0].stage);
+}
+
+void test_watchdog_refresh_prevents_release(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    voice_tick(&vt, 0);
+    voice_tick(&vt, 1000);
+    voice_note_hold(&vt, 60, 100, 2500);
+    voice_watchdog(&vt, 3000, 3000); // 3000 - 2500 = 500 < 3000
+    TEST_ASSERT_EQUAL(ENV_STAGE_SUSTAIN, vt.voices[0].stage);
+    voice_watchdog(&vt, 5500, 3000); // 5500 - 2500 = 3000 >= 3000
+    TEST_ASSERT_EQUAL(ENV_STAGE_RELEASE, vt.voices[0].stage);
+}
+
+void test_all_notes_off_releases_all(void) {
+    voice_table_t vt;
+    init(&vt);
+    voice_note_on(&vt, 60, 100, 0);
+    voice_note_on(&vt, 64, 100, 0);
+    voice_note_on(&vt, 67, 100, 0);
+    voice_tick(&vt, 0);
+    voice_all_notes_off(&vt, 1000);
+    for (int i = 0; i < 3; i++) TEST_ASSERT_EQUAL(ENV_STAGE_RELEASE, vt.voices[i].stage);
+    TEST_ASSERT_EQUAL_UINT8(3, voice_active_count(&vt)); // still active while releasing
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_init_all_free);
@@ -205,5 +269,11 @@ int main(void) {
     RUN_TEST(test_mono_current_falls_back_on_release);
     RUN_TEST(test_mono_current_release_tail);
     RUN_TEST(test_mono_current_all_idle);
+    RUN_TEST(test_note_on_sets_hold_refresh);
+    RUN_TEST(test_note_hold_refreshes_active);
+    RUN_TEST(test_note_hold_starts_missing);
+    RUN_TEST(test_watchdog_releases_stuck_sustain);
+    RUN_TEST(test_watchdog_refresh_prevents_release);
+    RUN_TEST(test_all_notes_off_releases_all);
     return UNITY_END();
 }

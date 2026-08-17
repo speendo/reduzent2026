@@ -16,6 +16,7 @@ typedef struct {
     uint32_t phase;          // 32-bit phase accumulator (used by path B mixer)
     uint32_t stage_start_ms; // ms timestamp when current stage began
     uint32_t born_ms;        // ms timestamp of note-on (oldest tiebreak)
+    uint32_t hold_refresh_ms; // last NOTE_HOLD (or note-on) for the watchdog
 } voice_t;
 
 typedef struct {
@@ -33,6 +34,7 @@ static inline void voice_table_init(voice_table_t* vt, const envelope_params_t* 
         vt->voices[i].phase = 0;
         vt->voices[i].stage_start_ms = 0;
         vt->voices[i].born_ms = 0;
+        vt->voices[i].hold_refresh_ms = 0;
     }
     vt->env = env;
 }
@@ -55,6 +57,7 @@ static inline int voice_note_on(voice_table_t* vt, uint8_t note, uint8_t velocit
             v->release_start = 0;
             v->stage_start_ms = now_ms;
             v->born_ms = now_ms;
+            v->hold_refresh_ms = now_ms;
             return i;
         }
     }
@@ -88,6 +91,7 @@ static inline int voice_note_on(voice_table_t* vt, uint8_t note, uint8_t velocit
     v->phase = 0;
     v->stage_start_ms = now_ms;
     v->born_ms = now_ms;
+    v->hold_refresh_ms = now_ms;
     return idx;
 }
 
@@ -104,6 +108,46 @@ static inline int voice_note_off(voice_table_t* vt, uint8_t note, uint32_t now_m
         }
     }
     return released;
+}
+
+// Keepalive refresh: reset the hold timer of any active voice with this note;
+// if none is sounding, start one (self-heals a dropped note-on).
+static inline int voice_note_hold(voice_table_t* vt, uint8_t note, uint8_t velocity, uint32_t now_ms) {
+    if (velocity == 0) return -1;
+    for (int i = 0; i < MAX_VOICES; i++) {
+        voice_t* v = &vt->voices[i];
+        if (voice_is_active(v) && v->note == note) {
+            v->hold_refresh_ms = now_ms;
+            return i;
+        }
+    }
+    return voice_note_on(vt, note, velocity, now_ms);
+}
+
+// Release any voice stuck in SUSTAIN longer than timeout_ms since its last
+// refresh. Called once per control tick with the same `now_ms` as voice_tick.
+static inline void voice_watchdog(voice_table_t* vt, uint32_t now_ms, uint32_t timeout_ms) {
+    for (int i = 0; i < MAX_VOICES; i++) {
+        voice_t* v = &vt->voices[i];
+        if (v->stage != ENV_STAGE_SUSTAIN) continue;
+        if ((int32_t)(now_ms - v->hold_refresh_ms) >= (int32_t)timeout_ms) {
+            v->release_start = v->level;
+            v->stage = ENV_STAGE_RELEASE;
+            v->stage_start_ms = now_ms;
+        }
+    }
+}
+
+// Release every active voice (release tails ring). Used by NOTES_OFF.
+static inline void voice_all_notes_off(voice_table_t* vt, uint32_t now_ms) {
+    for (int i = 0; i < MAX_VOICES; i++) {
+        voice_t* v = &vt->voices[i];
+        if (voice_is_active(v) && v->stage != ENV_STAGE_RELEASE) {
+            v->release_start = v->level;
+            v->stage = ENV_STAGE_RELEASE;
+            v->stage_start_ms = now_ms;
+        }
+    }
 }
 
 // Advance every active voice's envelope by one tick.
