@@ -3,27 +3,28 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_system.h>
+#include <esp32-hal-timer.h>
 
 #include "espnow_frame.h"
 #include "note_freq.h"
 #include "envelope.h"
 #include "voice.h"
 #include "expression.h"
+#include "mixer.h"
 
 #define MY_CHANNEL 0       // TODO: parasol config (later slice)
 #define PIEZO_PIN 3
 #define PWM_CHANNEL 0
 #define PWM_RES 8
-#define ESP_NOW_CHANNEL 1  // fixed WiFi channel; must match the controller
+#define ESP_NOW_CHANNEL 13  // fixed WiFi channel; MUST stay 13 to match controller_main.cpp
 #define HEARTBEAT_MS 10000
 #define HEARTBEAT_JITTER_MS 1000
 
 #define ARP_TICK_MS 16     // ~60 Hz: arpeggio index + frequency retune
 #define PITCH_BEND_RANGE 2 // +/- semitones (leaf-spec default)
 
-// Render path seam: path A (arpeggio) is implemented here; path B (1-bit mixer)
-// is the next slice and reuses voice.h/envelope.h/expression.h unchanged.
-typedef enum { RENDER_ARPEGGIO = 0, RENDER_1BIT = 1 } render_path_t;
+// Render paths: A = LEDC arpeggio, B = 1-bit 32 kHz mixer, M = LEDC monophonic.
+typedef enum { RENDER_ARPEGGIO = 0, RENDER_1BIT = 1, RENDER_MONO = 2 } render_path_t;
 
 static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -38,6 +39,10 @@ static uint8_t poly_pressure[128];       // per-note aftertouch, 127 = full
 static int arp_index = -1;               // current arpeggiated voice, -1 = none
 static uint32_t last_arp_ms = 0;
 
+static hw_timer_t* mix_timer = NULL;     // path B 32 kHz sample timer
+static uint32_t phase_inc[MAX_VOICES];   // path B per-voice phase increments
+static int mono_note = 0xFF;             // path M note currently driving LEDC
+
 static uint32_t last_note_millis = 0;    // 0 = never played
 static bool played_since_hb = false;
 
@@ -46,6 +51,14 @@ static void set_duty(uint16_t level, uint8_t chan_p, uint8_t poly_p) {
     uint8_t aftertouch = scale_level(chan_p, poly_p); // compose channel x poly
     uint8_t scaled = scale_level((uint8_t)level, aftertouch);
     ledcWrite(PWM_CHANNEL, (uint32_t)scaled << 1); // 7-bit -> 8-bit, max 254
+}
+
+// Retune the LEDC frequency for a note (pitch bend + vibrato applied).
+static void retune_ledc(uint32_t now_ms, uint8_t note) {
+    int16_t cents = pitch_bend_cents(pitch_bend, PITCH_BEND_RANGE)
+                  + vibrato_cents(now_ms, cc1_vibrato);
+    uint16_t freq = cents_to_freq(note_to_freq(note), cents);
+    ledcChangeFrequency(PWM_CHANNEL, freq, PWM_RES);
 }
 
 // Path A: advance ADSR every control tick and keep duty on the arpeggiated voice.
@@ -64,15 +77,86 @@ static void render_arpeggio_advance(uint32_t now_ms) {
     int next = voice_arpeggio_step(&voices, arp_index);
     if (next >= 0) {
         arp_index = next;
-        voice_t* v = &voices.voices[arp_index];
-        int16_t cents = pitch_bend_cents(pitch_bend, PITCH_BEND_RANGE)
-                      + vibrato_cents(now_ms, cc1_vibrato);
-        uint16_t freq = cents_to_freq(note_to_freq(v->note), cents);
-        ledcChangeFrequency(PWM_CHANNEL, freq, PWM_RES);
+        retune_ledc(now_ms, voices.voices[arp_index].note);
     } else {
         arp_index = -1;
         ledcWrite(PWM_CHANNEL, 0);
     }
+}
+
+// Path M: last-note-wins monophonic. ADSR + duty + retune-on-note-change every
+// ~1 ms; continuous pitch bend/vibrato retunes on the shared ~60 Hz tick.
+static void render_mono_ctrl(uint32_t now_ms) {
+    voice_tick(&voices, now_ms);
+    int idx = voice_mono_current(&voices);
+    if (idx >= 0) {
+        voice_t* v = &voices.voices[idx];
+        set_duty(v->level, chan_pressure, poly_pressure[v->note]);
+        if (v->note != mono_note) {
+            mono_note = v->note;
+            retune_ledc(now_ms, v->note);
+        }
+    } else {
+        mono_note = 0xFF;
+        ledcWrite(PWM_CHANNEL, 0);
+    }
+}
+
+// Path B: 32 kHz ISR — XOR all active voices into the piezo GPIO. No float
+// math here: phase increments were precomputed by mixer_update_incs.
+static void IRAM_ATTR on_mixer_sample(void) {
+    digitalWrite(PIEZO_PIN, mix_voices(&voices, phase_inc));
+}
+
+// Path B: recompute per-voice phase increments (note + pitch bend + vibrato).
+static void mixer_update_incs(uint32_t now_ms) {
+    for (int i = 0; i < MAX_VOICES; i++) {
+        voice_t* v = &voices.voices[i];
+        if (!voice_is_active(v)) { phase_inc[i] = 0; continue; }
+        int16_t cents = pitch_bend_cents(pitch_bend, PITCH_BEND_RANGE)
+                      + vibrato_cents(now_ms, cc1_vibrato);
+        uint16_t freq = cents_to_freq(note_to_freq(v->note), cents);
+        phase_inc[i] = phase_increment(freq, MIXER_SAMPLE_RATE);
+    }
+}
+
+// Path B control (decimated ~1 kHz): ADSR + expression -> phase increments.
+static void render_1bit_ctrl(uint32_t now_ms) {
+    voice_tick(&voices, now_ms);
+    mixer_update_incs(now_ms);
+}
+
+// Detach LEDC and start the 32 kHz GPIO mixer (path B).
+static void enter_1bit(void) {
+    ledcDetachPin(PIEZO_PIN);
+    pinMode(PIEZO_PIN, OUTPUT);
+    digitalWrite(PIEZO_PIN, 0);
+    mix_timer = timerBegin(0, 1, true);        // 80 MHz APB tick (C3)
+    timerAttachInterrupt(mix_timer, &on_mixer_sample, true);
+    timerAlarmWrite(mix_timer, 2500, true);    // 80e6 / 2500 = 32 kHz
+    timerAlarmEnable(mix_timer);
+}
+
+// Stop the mixer (if running) and re-attach the pin to LEDC (paths A/M).
+static void enter_ledc(void) {
+    if (mix_timer) {
+        timerAlarmDisable(mix_timer);
+        timerDetachInterrupt(mix_timer);
+        mix_timer = NULL;
+    }
+    ledcAttachPin(PIEZO_PIN, PWM_CHANNEL);
+    ledcWrite(PWM_CHANNEL, 0);
+    arp_index = -1;
+    mono_note = 0xFF;
+}
+
+// Select render path; switches the pin driver (LEDC <-> GPIO) as needed.
+static void set_render_path(render_path_t next) {
+    if (next == render_path) return;
+    if (next == RENDER_1BIT) enter_1bit();
+    else if (render_path == RENDER_1BIT) enter_ledc();
+    else { arp_index = -1; mono_note = 0xFF; } // A <-> M: both LEDC, just reset
+    render_path = next;
 }
 
 static void send_heartbeat() {
@@ -121,19 +205,18 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
         case EVENT_CC1_VIBRATO:
             cc1_vibrato = frame.value;
             break;
-        case EVENT_PROGRAM_CHANGE:
-            // 0 = arpeggio (path A); 1 = 1-bit mixer (path B, next slice).
-            render_path = (frame.value == 1) ? RENDER_1BIT : RENDER_ARPEGGIO;
-            if (render_path == RENDER_1BIT) {
-                // Path B leaves the piezo silent: kill any sounding note so
-                // LEDC does not keep its last frequency/duty humming.
-                arp_index = -1;
-                ledcWrite(PWM_CHANNEL, 0);
-            }
+        case EVENT_PROGRAM_CHANGE: {
+            // 0 = arpeggio (path A); 1 = 1-bit mixer (path B); 2 = monophonic (path M).
+            render_path_t next = (frame.value == 1) ? RENDER_1BIT
+                               : (frame.value == 2) ? RENDER_MONO
+                               : RENDER_ARPEGGIO;
+            set_render_path(next);
             break;
+        }
         case EVENT_PANIC:
             voice_table_init(&voices, &ENVELOPE_DEFAULT);
             arp_index = -1;
+            mono_note = 0xFF;
             ledcWrite(PWM_CHANNEL, 0);
             break;
         default:
@@ -180,8 +263,15 @@ void loop() {
             last_arp_ms = now;
             render_arpeggio_advance(now); // arpeggio + frequency every ~16 ms
         }
+    } else if (render_path == RENDER_MONO) {
+        render_mono_ctrl(now); // ADSR + duty + retune-on-change every ~1 ms
+        if ((int32_t)(now - last_arp_ms) >= ARP_TICK_MS && mono_note != 0xFF) {
+            last_arp_ms = now;
+            retune_ledc(now, mono_note); // pitch bend + vibrato at ~60 Hz
+        }
+    } else {
+        render_1bit_ctrl(now); // ADSR + phase increments at ~1 kHz; ISR mixes at 32 kHz
     }
-    // RENDER_1BIT is unimplemented until the next slice; the leaf stays silent.
 
     static uint32_t next_hb = 0; // first heartbeat fires immediately at boot
     if ((int32_t)(now - next_hb) >= 0) {

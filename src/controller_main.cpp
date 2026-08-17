@@ -6,7 +6,7 @@
 #include "espnow_frame.h"
 #include "text_parser.h"
 
-#define ESP_NOW_CHANNEL 1  // fixed WiFi channel; must match every leaf
+#define ESP_NOW_CHANNEL 13  // fixed WiFi channel; must match every leaf
 
 static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static char line_buf[64];
