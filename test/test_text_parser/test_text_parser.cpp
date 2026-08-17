@@ -116,6 +116,40 @@ void test_p_vs_pa_vs_panic(void) {
     TEST_ASSERT_EQUAL_UINT8(EVENT_PANIC, f.type);
 }
 
+void test_panic_channel(void) {
+    espnow_frame_t f;
+    TEST_ASSERT_EQUAL(1, parse_command("panic 5\n", &f));
+    TEST_ASSERT_EQUAL_UINT8(5, f.channel);
+    TEST_ASSERT_EQUAL_UINT8(EVENT_PANIC, f.type);
+}
+
+void test_noff_all(void) {
+    espnow_frame_t f;
+    TEST_ASSERT_EQUAL(1, parse_command("noff\n", &f));
+    TEST_ASSERT_EQUAL_UINT8(ESP_NOW_CHANNEL_BROADCAST, f.channel);
+    TEST_ASSERT_EQUAL_UINT8(EVENT_NOTES_OFF, f.type);
+}
+
+void test_noff_channel(void) {
+    espnow_frame_t f;
+    TEST_ASSERT_EQUAL(1, parse_command("noff 3\n", &f));
+    TEST_ASSERT_EQUAL_UINT8(3, f.channel);
+    TEST_ASSERT_EQUAL_UINT8(EVENT_NOTES_OFF, f.type);
+}
+
+void test_noff_not_note_on(void) {
+    espnow_frame_t f;
+    TEST_ASSERT_EQUAL(1, parse_command("noff 4\n", &f));
+    TEST_ASSERT_EQUAL_UINT8(EVENT_NOTES_OFF, f.type);
+}
+
+void test_resetcc(void) {
+    espnow_frame_t f;
+    TEST_ASSERT_EQUAL(1, parse_command("resetcc 7\n", &f));
+    TEST_ASSERT_EQUAL_UINT8(7, f.channel);
+    TEST_ASSERT_EQUAL_UINT8(EVENT_RESET_CONTROLLERS, f.type);
+}
+
 void test_rejects(void) {
     espnow_frame_t f;
     TEST_ASSERT_EQUAL(0, parse_command("", &f));
@@ -135,6 +169,9 @@ void test_rejects(void) {
     TEST_ASSERT_EQUAL(0, parse_command("v 0 200\n", &f));      // depth out of range
     TEST_ASSERT_EQUAL(0, parse_command("s\n", &f));           // incomplete settings
     TEST_ASSERT_EQUAL(0, parse_command("settings 255\n", &f)); // id out of range (0xFF reserved)
+    TEST_ASSERT_EQUAL(0, parse_command("panic 99\n", &f));
+    TEST_ASSERT_EQUAL(0, parse_command("noff 99\n", &f));
+    TEST_ASSERT_EQUAL(0, parse_command("resetcc 99\n", &f));
 }
 
 int main(void) {
@@ -152,6 +189,11 @@ int main(void) {
     RUN_TEST(test_program_change);
     RUN_TEST(test_vibrato);
     RUN_TEST(test_p_vs_pa_vs_panic);
+    RUN_TEST(test_panic_channel);
+    RUN_TEST(test_noff_all);
+    RUN_TEST(test_noff_channel);
+    RUN_TEST(test_noff_not_note_on);
+    RUN_TEST(test_resetcc);
     RUN_TEST(test_rejects);
     return UNITY_END();
 }

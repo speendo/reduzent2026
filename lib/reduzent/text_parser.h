@@ -16,11 +16,45 @@ static inline int parse_command(const char* line, espnow_frame_t* out) {
 
     if (line[0] == 'p' && line[1] == 'a' && line[2] == 'n' &&
         line[3] == 'i' && line[4] == 'c') {
+        int ch;
         out->channel = ESP_NOW_CHANNEL_BROADCAST;
         out->type = EVENT_PANIC;
         out->note = 0;
         out->value = 0;
         out->value_hi = 0;
+        if (sscanf(line, "panic %d", &ch) == 1) {
+            if (ch < 0 || ch > 15) return 0;
+            out->channel = (uint8_t)ch;
+        }
+        return 1;
+    }
+
+    if (line[0] == 'n' && line[1] == 'o' && line[2] == 'f' && line[3] == 'f') {
+        int ch;
+        out->channel = ESP_NOW_CHANNEL_BROADCAST;
+        out->type = EVENT_NOTES_OFF;
+        out->note = 0;
+        out->value = 0;
+        out->value_hi = 0;
+        if (sscanf(line, "noff %d", &ch) == 1) {
+            if (ch < 0 || ch > 15) return 0;
+            out->channel = (uint8_t)ch;
+        }
+        return 1;
+    }
+
+    if (line[0] == 'r' && line[1] == 'e' && line[2] == 's' &&
+        line[3] == 'e' && line[4] == 't' && line[5] == 'c' && line[6] == 'c') {
+        int ch;
+        out->channel = ESP_NOW_CHANNEL_BROADCAST;
+        out->type = EVENT_RESET_CONTROLLERS;
+        out->note = 0;
+        out->value = 0;
+        out->value_hi = 0;
+        if (sscanf(line, "resetcc %d", &ch) == 1) {
+            if (ch < 0 || ch > 15) return 0;
+            out->channel = (uint8_t)ch;
+        }
         return 1;
     }
 
