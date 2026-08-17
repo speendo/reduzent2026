@@ -16,6 +16,9 @@ typedef enum {
     EVENT_PANIC = 6,
     EVENT_ENTER_SETTINGS = 7,
     EVENT_HEARTBEAT = 8,
+    EVENT_NOTE_HOLD = 9,
+    EVENT_NOTES_OFF = 10,
+    EVENT_RESET_CONTROLLERS = 11,
 } espnow_event_type_t;
 
 // Fixed 5-byte frame, channel-first (leaf filters on byte 0).

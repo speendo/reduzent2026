@@ -39,11 +39,32 @@ void test_heartbeat_event_type(void) {
     TEST_ASSERT_EQUAL(8, EVENT_HEARTBEAT);
 }
 
+void test_new_event_types(void) {
+    TEST_ASSERT_EQUAL(9, EVENT_NOTE_HOLD);
+    TEST_ASSERT_EQUAL(10, EVENT_NOTES_OFF);
+    TEST_ASSERT_EQUAL(11, EVENT_RESET_CONTROLLERS);
+}
+
+void test_note_hold_round_trip(void) {
+    espnow_frame_t in = {3, EVENT_NOTE_HOLD, 60, 100, 0};
+    uint8_t buf[ESP_NOW_FRAME_SIZE];
+    espnow_frame_t out;
+    frame_pack(&in, buf);
+    frame_unpack(buf, &out);
+    TEST_ASSERT_EQUAL_UINT8(3, out.channel);
+    TEST_ASSERT_EQUAL_UINT8(EVENT_NOTE_HOLD, out.type);
+    TEST_ASSERT_EQUAL_UINT8(60, out.note);
+    TEST_ASSERT_EQUAL_UINT8(100, out.value);
+    TEST_ASSERT_EQUAL_UINT8(0, out.value_hi);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_frame_size_and_constants);
     RUN_TEST(test_pack_unpack_round_trip);
     RUN_TEST(test_pack_byte_layout);
     RUN_TEST(test_heartbeat_event_type);
+    RUN_TEST(test_new_event_types);
+    RUN_TEST(test_note_hold_round_trip);
     return UNITY_END();
 }
