@@ -233,6 +233,16 @@ def main() -> None:
         cmd = midi_to_command(msg)
         if cmd is None:
             return
+        if override_ch is not None or override_inst is not None:
+            parts = cmd.split()
+            if override_ch is not None:
+                if parts[0] in ("n", "x", "p", "a", "g", "v") and len(parts) >= 2:
+                    parts[1] = str(override_ch)
+                elif parts[0] == "pa" and len(parts) >= 3:
+                    parts[1] = str(override_ch)
+            if override_inst is not None and parts[0] == "g" and len(parts) >= 3:
+                parts[2] = str(override_inst)
+            cmd = " ".join(parts)
         with lock:
             s = state["ser"]
             if s is not None:
@@ -377,6 +387,11 @@ def main() -> None:
                         override_inst = int(raw) % 128
                     except ValueError:
                         pass
+                    else:
+                        with lock:
+                            s = state["ser"]
+                            if s is not None:
+                                s.write(f"g {override_ch or 0} {override_inst}\n".encode())
                 else:
                     override_inst = None
                 draw_status(midi_name, port, baud, override_ch, override_inst)
