@@ -215,7 +215,8 @@ def main() -> None:
                     except OSError:
                         pass
         if not quiet:
-            print(cmd, flush=True)
+            sys.stdout.write(cmd + "\r\n")
+            sys.stdout.flush()
 
     inport.callback = on_message
 
