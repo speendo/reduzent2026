@@ -301,6 +301,8 @@ def main() -> None:
                         data = b""
                     if data:
                         text = data.decode("utf-8", errors="replace")
+                        # Raw mode needs \r\n; controller sends \n only
+                        text = text.replace("\n", "\r\n")
                         if text.startswith("hb "):
                             text = f"\033[2;36m{text}\033[0m"
                         with stdout_lock:
