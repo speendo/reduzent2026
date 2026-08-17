@@ -62,6 +62,13 @@ The fixed 5-byte frame is unchanged. Add three event types and extend one:
 - Keepalive: every `R = X/Y` ms, walk the held table and send one `NOTE_HOLD`
   per held note (carrying its velocity). Each held note is therefore re-affirmed
   once per `R`.
+- The controller's `loop()` blocks on a FreeRTOS semaphore (event-driven serial),
+  so the keepalive must be scheduled by making that semaphore wait time out at
+  `R` ms (`xSemaphoreTake(evt_sem, pdMS_TO_TICKS(KEEPALIVE_INTERVAL_MS))`) and
+  running a `millis()`-throttled keepalive check after the take. Without the
+  timeout, `loop()` never wakes while a note is silently held and the leaf's
+  watchdog would release it — the feature would cut notes off instead of
+  protecting them.
 - `panic [<ch>]` and `noff [<ch>]`: clear the held table for the scope (all or
   one channel), then transmit the event **three times** (a dropped panic/noff
   must not silently fail).
