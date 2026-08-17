@@ -30,7 +30,7 @@ fire-and-forget — no acknowledgements.
 | PITCH_BEND          | target      | —    | 14-bit bend         | piezo: bend active notes                      |
 | CHANNEL_AFTERTOUCH  | target      | —    | pressure            | piezo: amplitude modulation                   |
 | POLY_AFTERTOUCH     | target      | yes  | pressure            | piezo: per-note amplitude                     |
-| PROGRAM_CHANGE      | target      | —    | program             | piezo: select mode (0 = arpeggio, 1 = 1-bit)  |
+| PROGRAM_CHANGE      | target      | —    | program             | piezo: select mode (0 = arpeggio, 1 = 1-bit, 2 = monophonic) |
 | CC1_VIBRATO         | target      | —    | depth               | piezo: vibrato depth                          |
 | PANIC               | 0xFF        | —    | —                   | all leaves: stop everything                   |
 | ENTER_SETTINGS      | 0xFF        | id  | —                   | enter settings mode; note = leaf id (0–254), 0xFF = all |

@@ -20,7 +20,8 @@ leaf firmware
 ├── piezo driver
 │   ├── voice table (MAX_VOICES = 8)
 │   ├── path A: LEDC (single note + arpeggio)
-│   └── path B: 1-bit mixer (32 kHz timer ISR)
+│   ├── path B: 1-bit mixer (32 kHz timer ISR)
+│   └── path M: LEDC monophonic (last-note-wins)
 └── solenoid driver (LEDC, fixed 20 kHz)
 ```
 
@@ -61,6 +62,18 @@ leaf firmware
   ISR.
 - `phaseIncrement = freq × 2³² / sampleRate` (64-bit intermediate).
 
+## Piezo driver — path M: monophonic (LEDC, last-note-wins)
+
+- One LEDC channel + timer (same pin as path A). Exactly one note sounds at a
+  time: the most recently pressed still-held note.
+- A voice is "held" while its stage is ATTACK/DECAY/SUSTAIN; "current" = held
+  voice with the highest `born_ms`. Releasing the current note falls back to
+  the next most recently pressed held voice (its envelope continues, no attack
+  retrigger); releasing the last note lets its release tail ring, then silence.
+- Note changes retune the LEDC frequency immediately (~1 ms); continuous pitch
+  bend + vibrato retune on the ~60 Hz tick (as path A).
+- Selected by `PROGRAM_CHANGE` value 2.
+
 ## Expression (piezo)
 
 - **Pitch bend** (14-bit, center 8192): frequency multiplier
@@ -69,7 +82,7 @@ leaf firmware
 - **Poly aftertouch**: scales the amplitude of one note.
 - **Vibrato** (`CC1_VIBRATO`): 6 Hz LFO, depth 0–50 cents from CC1 0–127.
   In path A it offsets the retune target; in path B it offsets `phaseIncrement`.
-- **Program change**: select render path (0 = LEDC/arpeggio, 1 = 1-bit).
+- **Program change**: select render path (0 = LEDC/arpeggio, 1 = 1-bit, 2 = monophonic).
 
 ## Note → frequency
 
@@ -129,6 +142,7 @@ range; (solenoid) hold duration + velocity table.
     percussion instrument, and a receive-only leaf must wake on packet anyway
     (radio can't fully sleep without jitter on every note). Needs a proper
     wake-on-packet design; configurable duration should be a parasol setting.
-- Path B (1-bit 32 kHz mixer) — next slice; path A (LEDC + arpeggio) is
-  implemented as of the polyphony slice. The voice table + envelope + expression
-  headers are render-agnostic and reused unchanged by path B.
+- Path B (1-bit 32 kHz mixer) and path M (monophonic) are implemented as of
+  the path-B slice; both reuse the voice table + envelope + expression headers
+  unchanged. Path B's 32 kHz ISR vs ESP-NOW latency remains a go/no-go that
+  must be re-measured on the final hardware.
