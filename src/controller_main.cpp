@@ -9,8 +9,10 @@
 
 #include "espnow_frame.h"
 #include "text_parser.h"
+#include "held_notes.h"
 
 #define ESP_NOW_CHANNEL 13  // fixed WiFi channel; must match every leaf
+#define KEEPALIVE_INTERVAL_MS 750  // X / Y (3000 / 4)
 #define LINE_BUF_LEN 64
 #define LINE_QUEUE_LEN 4
 
@@ -21,6 +23,7 @@ static SemaphoreHandle_t evt_sem = NULL;
 
 static char line_buf[LINE_BUF_LEN];
 static size_t line_len = 0;
+static held_notes_t held;
 
 // on_recv (WiFi task) may not do blocking serial I/O: buffer the frame, flag loop().
 static volatile bool rx_pending = false;
@@ -51,13 +54,33 @@ static void transmit(const espnow_frame_t* f) {
     }
 }
 
+static void transmit_redundant(const espnow_frame_t* f, int copies) {
+    for (int i = 0; i < copies; i++) transmit(f);
+}
+
 static void handle_line(const char* line) {
     espnow_frame_t frame;
-    if (parse_command(line, &frame)) {
-        transmit(&frame);
-        Serial.printf("[%lu] tx ch=%d type=%d note=%d value=%d\n",
-                      millis(), frame.channel, frame.type, frame.note, frame.value);
+    if (!parse_command(line, &frame)) return;
+
+    switch (frame.type) {
+        case EVENT_NOTE:
+            if (frame.value == 0) held_clear(&held, frame.channel, frame.note);
+            else held_set(&held, frame.channel, frame.note, frame.value);
+            transmit(&frame);
+            break;
+        case EVENT_PANIC:
+        case EVENT_NOTES_OFF:
+            if (frame.channel == ESP_NOW_CHANNEL_BROADCAST) held_clear_all(&held);
+            else held_clear_channel(&held, frame.channel);
+            transmit_redundant(&frame, 3);
+            break;
+        default:
+            transmit(&frame);
+            break;
     }
+
+    Serial.printf("[%lu] tx ch=%d type=%d note=%d value=%d\n",
+                  millis(), frame.channel, frame.type, frame.note, frame.value);
 }
 
 // Called by the serial RX callback (task context for both HWCDC onEvent and
@@ -126,12 +149,37 @@ void setup() {
     Serial.onReceive(on_serial_rx);
 #endif
 
+    held_notes_init(&held);
     Serial.println("controller ready");
 }
 
+static void send_keepalive(void) {
+    espnow_frame_t frame;
+    frame.type = EVENT_NOTE_HOLD;
+    frame.value_hi = 0;
+    uint16_t cursor = 0;
+    uint8_t ch, note, vel;
+    while (held_next(&held, &cursor, &ch, &note, &vel)) {
+        frame.channel = ch;
+        frame.note = note;
+        frame.value = vel;
+        transmit(&frame);
+    }
+}
+
 void loop() {
-    // Block until a line or frame is ready, then handle it in task context.
-    if (xSemaphoreTake(evt_sem, portMAX_DELAY) != pdTRUE) return;
+    // Wake on any event, or at least every KEEPALIVE_INTERVAL_MS so the
+    // held-note keepalive fires even while the link is idle. Without the
+    // timeout, loop() never wakes during a silently held note and the leaf
+    // watchdog would cut it off.
+    xSemaphoreTake(evt_sem, pdMS_TO_TICKS(KEEPALIVE_INTERVAL_MS));
+
+    static uint32_t next_keepalive = 0; // first keepalive fires at boot (no-op)
+    uint32_t now = millis();
+    if ((int32_t)(now - next_keepalive) >= 0) {
+        send_keepalive();
+        next_keepalive = now + KEEPALIVE_INTERVAL_MS;
+    }
 
     if (rx_pending) {
         rx_pending = false;
