@@ -62,7 +62,8 @@ Non-negotiable parsing rules:
 **Decision: compact typed event relay** `{type, channel, note, value}`.
 
 Types: `NOTE`, `PITCH_BEND`, `CHANNEL_AFTERTOUCH`, `POLY_AFTERTOUCH`,
-`PROGRAM_CHANGE`, `CC`, `PANIC`, `ENTER_SETTINGS`.
+`PROGRAM_CHANGE`, `CC`, `PANIC`, `ENTER_SETTINGS`, `NOTE_HOLD`, `NOTES_OFF`,
+`RESET_CONTROLLERS`.
 
 Pitch bend needs a 14-bit value (2 bytes); poly aftertouch needs a note field.
 Frames stay ~6 bytes.
