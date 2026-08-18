@@ -2,6 +2,7 @@
 #define HELD_NOTES_H
 
 #include <stdint.h>
+#include <string.h>
 
 #define HELD_CHANNELS 16
 #define HELD_NOTES 128
@@ -11,9 +12,7 @@ typedef struct {
 } held_notes_t;
 
 static inline void held_notes_init(held_notes_t* h) {
-    for (int ch = 0; ch < HELD_CHANNELS; ch++)
-        for (int n = 0; n < HELD_NOTES; n++)
-            h->vel[ch][n] = 0;
+    memset(h, 0, sizeof(*h));
 }
 
 static inline void held_set(held_notes_t* h, uint8_t ch, uint8_t note, uint8_t vel) {
