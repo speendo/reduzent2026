@@ -11,6 +11,7 @@
 #include "voice.h"
 #include "expression.h"
 #include "mixer.h"
+#include "solenoid.h"
 
 #define MY_CHANNEL 0       // TODO: parasol config (later slice)
 #define PIEZO_PIN 3
@@ -23,6 +24,16 @@
 #define ARP_TICK_MS 16     // ~60 Hz: arpeggio index + frequency retune
 #define PITCH_BEND_RANGE 2 // +/- semitones (leaf-spec default)
 #define STUCK_NOTE_TIMEOUT_MS 3000
+// Solenoid leaf (percussive; see docs/leaf-spec.md §Solenoid driver).
+// GPIO 4 is a plain GPIO on the ESP32-C3 (piezo uses GPIO 3).
+#define SOLENOID_PIN 4
+#define SOLENOID_LEDC_CHANNEL 1
+#define SOLENOID_LEDC_TIMER 1
+#define SOLENOID_FREQ 20000       // ~20 kHz carrier: duty controls coil current
+#define SOLENOID_NOTE 60          // note that triggers this solenoid (parasol later)
+#define SOLENOID_HOLD_MS 40       // strike window; exceeds pull-in time
+#define SOLENOID_DUTY_MIN 40      // velocity 1 (0-255)
+#define SOLENOID_DUTY_MAX 220     // velocity 127 (0-255)
 #define NUM_NOTES 128         // MIDI note count; poly_pressure table size
 
 // Render paths: B = 1-bit 32 kHz mixer, A = LEDC arpeggio, M = LEDC monophonic.
@@ -31,6 +42,7 @@ typedef enum { RENDER_1BIT = 0, RENDER_ARPEGGIO = 1, RENDER_MONO = 2 } render_pa
 static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 static voice_table_t voices;
+static solenoid_t solenoid;
 
 static render_path_t render_path = RENDER_1BIT;
 static uint16_t pitch_bend = PITCH_BEND_CENTER;
@@ -186,10 +198,8 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
     switch (frame.type) {
         case EVENT_NOTE:
             frame.note &= 0x7F; // clamp untrusted radio value to 0-127
-            if (frame.value == 0) {
-                voice_note_off(&voices, frame.note, now);
-            } else {
-                voice_note_on(&voices, frame.note, frame.value, now);
+            if (solenoid_note_on(&solenoid, frame.note, frame.value, now)) {
+                ledcWrite(SOLENOID_LEDC_CHANNEL, solenoid.active_duty);
                 last_note_millis = now;
                 played_since_hb = true;
             }
@@ -249,6 +259,11 @@ void setup() {
     ledcAttachPin(PIEZO_PIN, PWM_CHANNEL);
     ledcWrite(PWM_CHANNEL, 0);
 
+    ledcSetup(SOLENOID_LEDC_CHANNEL, SOLENOID_FREQ, PWM_RES);
+    ledcAttachPin(SOLENOID_PIN, SOLENOID_LEDC_CHANNEL);
+    ledcWrite(SOLENOID_LEDC_CHANNEL, 0);
+    solenoid_init(&solenoid, SOLENOID_NOTE, SOLENOID_DUTY_MIN, SOLENOID_DUTY_MAX, SOLENOID_HOLD_MS);
+
     WiFi.mode(WIFI_STA);
     esp_wifi_set_ps(WIFI_PS_NONE);  // never modem-sleep; don't miss broadcasts
     esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
@@ -271,6 +286,11 @@ void setup() {
 
 void loop() {
     uint32_t now = millis();
+
+    // Percussive: release the coil once the strike window closes.
+    if (solenoid_tick(&solenoid, now) == 0) {
+        ledcWrite(SOLENOID_LEDC_CHANNEL, 0);
+    }
 
     voice_watchdog(&voices, now, STUCK_NOTE_TIMEOUT_MS);
 
