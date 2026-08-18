@@ -128,6 +128,27 @@ one sender; note it if a second controller is ever added (backlog).
   refreshes before a held note is (incorrectly) released.
 - Compile constants for now; parasol-configurable later.
 
+### Tuning guide
+
+The two firmware constants are `STUCK_NOTE_TIMEOUT_MS` (leaf, `X`) and
+`KEEPALIVE_INTERVAL_MS` (controller, `R`). Adjusting one usually means
+adjusting the other.
+
+**Constraint:** `R < X` — otherwise the leaf releases notes between keepalives.
+As a rule of thumb, keep `Y >= 2` (i.e. `R <= X / 2`).
+
+| Goal | Change | Tradeoff |
+|------|--------|----------|
+| Longer sustain tolerance (slow link, long release tails) | Increase `X` | Dropped note-offs linger up to `X` ms before auto-release |
+| Faster stuck-note cleanup | Decrease `X` | Legitimately held notes may release if keepalive is delayed |
+| More resilient to dropped frames | Decrease `R` (or increase `Y`) | More ESP-NOW traffic per held note |
+| Less wireless traffic | Increase `R` | Fewer chances to survive consecutive dropped frames |
+
+Example: `X = 5000, Y = 5, R = 1000` gives 5 s sustain tolerance with
+1 s keepalive — suited for a unreliable link but stuck notes linger
+up to 5 s. Conversely `X = 1500, Y = 3, R = 500` is aggressive cleanup
+for a responsive setup.
+
 ## Error handling / edge cases
 
 - Solenoid leaves: `NOTE_HOLD`, `NOTES_OFF`, `RESET_CONTROLLERS` are no-ops
