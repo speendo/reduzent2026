@@ -56,6 +56,12 @@ State machine (pure logic, header-only like the rest of `lib/reduzent/`):
 - Implemented as variables (defaults `min_duty`, `max_duty`) so later parasol
   settings can write them; a comment marks where a calibrated lookup table
   (parasol) would replace the linear formula.
+- **Suggested defaults for testing:** `min_duty = 40`, `max_duty = 220` on the
+  8-bit scale (0–255), i.e. `duty(vel) = 40 + 180 * (vel − 1) / 126`, clamped.
+  Rationale: `max_duty = 220` leaves ~14 % headroom below full duty to avoid
+  battery/step-up sag and coil heating on repeated hits; `min_duty = 40` is a
+  soft tap that is plausibly above the plunger's pull-in threshold. Both are
+  placeholders to be calibrated on hardware.
 - Strike envelope: energize at the computed duty for the full hold window, then
   off — no fade (a striker needs force, not envelope shaping).
 
