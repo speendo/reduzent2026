@@ -62,6 +62,41 @@ void test_duty_monotonic(void) {
     }
 }
 
+// === Task 2: retrigger + note-off ===
+
+void test_note_on_matching_note_strikes(void) {
+    solenoid_t s;
+    make_default(&s);
+    TEST_ASSERT_EQUAL(1, solenoid_note_on(&s, 60, 64, 1000));
+    TEST_ASSERT_EQUAL_UINT32(1040, s.active_until_ms);
+    TEST_ASSERT_EQUAL_UINT8(130, s.active_duty);
+}
+
+void test_note_on_non_matching_note_ignored(void) {
+    solenoid_t s;
+    make_default(&s);
+    TEST_ASSERT_EQUAL(0, solenoid_note_on(&s, 67, 100, 1000));
+    TEST_ASSERT_EQUAL_UINT32(0, s.active_until_ms);
+    TEST_ASSERT_EQUAL_UINT8(0, s.active_duty);
+}
+
+void test_note_off_ignored(void) {
+    solenoid_t s;
+    make_default(&s);
+    solenoid_note_on(&s, 60, 64, 1000);
+    TEST_ASSERT_EQUAL(0, solenoid_note_on(&s, 60, 0, 1005));
+    TEST_ASSERT_EQUAL_UINT32(1040, s.active_until_ms);
+}
+
+void test_retrigger_restarts_hold_window(void) {
+    solenoid_t s;
+    make_default(&s);
+    solenoid_note_on(&s, 60, 64, 1000);
+    TEST_ASSERT_EQUAL(1, solenoid_note_on(&s, 60, 127, 1030));
+    TEST_ASSERT_EQUAL_UINT32(1070, s.active_until_ms);
+    TEST_ASSERT_EQUAL_UINT8(220, s.active_duty);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_init_sets_defaults);
@@ -71,5 +106,9 @@ int main(void) {
     RUN_TEST(test_duty_velocity_0_is_zero);
     RUN_TEST(test_duty_velocity_over_127_clamps);
     RUN_TEST(test_duty_monotonic);
+    RUN_TEST(test_note_on_matching_note_strikes);
+    RUN_TEST(test_note_on_non_matching_note_ignored);
+    RUN_TEST(test_note_off_ignored);
+    RUN_TEST(test_retrigger_restarts_hold_window);
     return UNITY_END();
 }
