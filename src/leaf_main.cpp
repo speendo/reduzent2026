@@ -24,14 +24,14 @@
 #define PITCH_BEND_RANGE 2 // +/- semitones (leaf-spec default)
 #define STUCK_NOTE_TIMEOUT_MS 3000
 
-// Render paths: A = LEDC arpeggio, B = 1-bit 32 kHz mixer, M = LEDC monophonic.
-typedef enum { RENDER_ARPEGGIO = 0, RENDER_1BIT = 1, RENDER_MONO = 2 } render_path_t;
+// Render paths: B = 1-bit 32 kHz mixer, A = LEDC arpeggio, M = LEDC monophonic.
+typedef enum { RENDER_1BIT = 0, RENDER_ARPEGGIO = 1, RENDER_MONO = 2 } render_path_t;
 
 static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 static voice_table_t voices;
 
-static render_path_t render_path = RENDER_ARPEGGIO;
+static render_path_t render_path = RENDER_1BIT;
 static uint16_t pitch_bend = PITCH_BEND_CENTER;
 static uint8_t chan_pressure = 127;      // 127 = full amplitude
 static uint8_t cc1_vibrato = 0;
@@ -207,10 +207,10 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
             cc1_vibrato = frame.value;
             break;
         case EVENT_PROGRAM_CHANGE: {
-            // 0 = arpeggio (path A); 1 = 1-bit mixer (path B); 2 = monophonic (path M).
-            render_path_t next = (frame.value == 1) ? RENDER_1BIT
+            // 0 = 1-bit mixer (path B); 1 = arpeggio (path A); 2 = monophonic (path M).
+            render_path_t next = (frame.value == 1) ? RENDER_ARPEGGIO
                                : (frame.value == 2) ? RENDER_MONO
-                               : RENDER_ARPEGGIO;
+                               : RENDER_1BIT;
             set_render_path(next);
             break;
         }

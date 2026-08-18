@@ -9,9 +9,9 @@ channel/poly aftertouch, program change, CC1 (vibrato), CC120/121/123 (panic).
 Ports are chosen on start with a small interactive menu (MIDI input + serial
 output); the last selection is remembered in a settings file so the menu can be
 accepted by just pressing Enter next time. While running, press `m` to reopen
-the menu and switch ports, `s` to send a leaf (or all) into settings mode, or `q`
-(or Ctrl-C) to quit. Unix only (raw-terminal key handling, like
-tools/keyboard-serial.py).
+the menu and switch ports, `b` to change baud rate, `s` to send a leaf (or all)
+into settings mode, or `q` (or Ctrl-C) to quit. Unix only (raw-terminal key
+handling, like tools/keyboard-serial.py).
 
 MIDI is delivered through mido's native callback (a background thread that
 blocks in the driver and fires on message arrival), so forwarding is
@@ -41,6 +41,7 @@ DEFAULT_BAUD = 115200
 DEFAULT_CONFIG = os.path.join(
     os.path.expanduser("~"), ".config", "reduzent", "midi-bridge.json"
 )
+_PROGRAM_NAMES = {0: "1-bit", 1: "arp", 2: "mono"}
 
 
 def midi_to_command(msg) -> Optional[str]:
@@ -112,41 +113,76 @@ def resolve_settings(settings, midi_names, serial_names):
 
 
 def menu_choice(title, items, current):
-    """Print a numbered list (marking `current`) and return the chosen item.
+    """Show a selectable list with arrow-key navigation.
 
-    Enter accepts `current`; a number picks that item; anything invalid falls
-    back to `current`. Returns None when `items` is empty.
+    Up/Down arrows move the cursor, Enter selects, digits 1-9 jump to that
+    item, and Escape accepts the default (last used). Ctrl-C raises
+    KeyboardInterrupt.  Returns None when *items* is empty.
     """
-    print(title)
-    default_idx = items.index(current) if current in items else 0
-    for i, item in enumerate(items):
-        mark = "  (last used)" if i == default_idx else ""
-        print(f"  [{i + 1}] {item}{mark}")
     if not items:
         return None
-    raw = input("> ").strip()
-    if not raw:
-        return items[default_idx]
+
+    default_idx = items.index(current) if current in items else 0
+    cursor = default_idx
+    n = len(items)
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
     try:
-        idx = int(raw) - 1
-        if 0 <= idx < len(items):
-            return items[idx]
-    except ValueError:
-        pass
-    return items[default_idx]
+        tty.setraw(fd)
+
+        # Print title then N placeholder lines, then rewind to the first.
+        sys.stdout.write(f"{title}\r\n")
+        for _ in range(n):
+            sys.stdout.write("  \r\n")
+        sys.stdout.write(f"\033[{n}A")
+        sys.stdout.flush()
+
+        while True:
+            for i, item in enumerate(items):
+                sys.stdout.write("\033[2K")  # clear line
+                if i == cursor:
+                    sys.stdout.write(f" \033[1;36m>\033[0m [{i + 1}] {item}")
+                else:
+                    sys.stdout.write(f"   [{i + 1}] {item}")
+                if i == default_idx:
+                    sys.stdout.write(" \033[2m(last used)\033[0m")
+                sys.stdout.write("\r\n")
+            sys.stdout.write(f"\033[{n}A")
+            sys.stdout.flush()
+
+            ch = os.read(fd, 1)
+            if ch in (b"\r", b"\n"):
+                return items[cursor]
+            if ch == b"\x1b":
+                # Escape — could be a bare Esc or arrow sequence (\x1b[A/B).
+                if select.select([fd], [], [], 0.05)[0]:
+                    seq = os.read(fd, 2)
+                    if seq == b"[A":
+                        cursor = (cursor - 1) % n
+                    elif seq == b"[B":
+                        cursor = (cursor + 1) % n
+                else:
+                    return items[default_idx]
+            if ch == b"\x03":
+                raise KeyboardInterrupt
+            if ch.isdigit():
+                idx = int(ch) - 1
+                if 0 <= idx < n:
+                    return items[idx]
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def select_ports(settings, midi_names, serial_names):
-    """Prompt for MIDI input, serial port, and baud; return the triple."""
+    """Prompt for MIDI input and serial port; return (midi_name, port, baud).
+
+    Baud rate is read from *settings* (defaulting to DEFAULT_BAUD).  Use the
+    `b` key at runtime to change it.
+    """
     midi_name, port, baud = resolve_settings(settings, midi_names, serial_names)
     midi_name = menu_choice("MIDI input:", midi_names, midi_name)
     port = menu_choice("Serial port:", serial_names, port)
-    raw = input(f"Baud rate [{baud}]: ").strip()
-    if raw:
-        try:
-            baud = int(raw)
-        except ValueError:
-            pass
     return midi_name, port, baud
 
 
@@ -172,17 +208,31 @@ def reset_scroll_region() -> None:
 
 def draw_status(midi_name: str, port: str, baud: int,
                 override_ch: Optional[int], override_inst: Optional[int],
+                last_channel: Optional[int] = None,
+                last_program: Optional[int] = None,
                 lock: Optional[threading.Lock] = None) -> None:
     """Redraw the two-line status bar at the terminal bottom."""
     rows = os.get_terminal_size().lines
-    ch_display = str(override_ch) if override_ch is not None else "0"
-    ch_mode = "(override)" if override_ch is not None else "(MIDI)"
-    inst_display = str(override_inst) if override_inst is not None else "--"
+    if override_ch is not None:
+        ch_display = str(override_ch)
+        ch_mode = "(override)"
+    elif last_channel is not None:
+        ch_display = str(last_channel)
+        ch_mode = "(MIDI)"
+    else:
+        ch_display = "--"
+        ch_mode = "(MIDI)"
+    if override_inst is not None:
+        inst_display = str(override_inst)
+    elif last_program is not None:
+        inst_display = _PROGRAM_NAMES.get(last_program, str(last_program))
+    else:
+        inst_display = "--"
     line1 = f" \033[1;36m\u25b8\033[0m USB MIDI Keyboard \u2192 \033[1;32m{port}\033[0m @ \033[1;32m{baud}\033[0m"
     line2 = (
         f" \033[1;36m\u25b8\033[0m ch: \033[1;32m{ch_display}\033[0m {ch_mode}  "
         f"inst: \033[1;32m{inst_display}\033[0m   "
-        f"\033[2mm menu  s settings  c ch  i inst  p panic  o noff  q quit\033[0m"
+        f"\033[2mm menu  b baud  s settings  c ch  i inst  p panic  o noff  q quit\033[0m"
     )
     ctx = lock if lock else _noop_ctx()
     with ctx:
@@ -230,7 +280,10 @@ def main() -> None:
         return
 
     midi_names, serial_names = detected()
-    midi_name, port, baud = select_ports(load_settings(config), midi_names, serial_names)
+    try:
+        midi_name, port, baud = select_ports(load_settings(config), midi_names, serial_names)
+    except KeyboardInterrupt:
+        return
     if midi_name is None or port is None:
         raise SystemExit("no MIDI input or serial port detected")
     inport, ser = open_connections(midi_name, port, baud)
@@ -247,15 +300,19 @@ def main() -> None:
     override_ch = None
     override_inst = None
     last_channel = None
+    last_program = None
 
     def on_message(msg):
         nonlocal write_error
         nonlocal last_channel
+        nonlocal last_program
         cmd = midi_to_command(msg)
         if cmd is None:
             return
         if msg.type in ("note_on", "note_off"):
             last_channel = msg.channel
+        if msg.type == "program_change":
+            last_program = msg.program
         if override_ch is not None or override_inst is not None:
             parts = cmd.split()
             if override_ch is not None:
@@ -296,8 +353,11 @@ def main() -> None:
 
     last_redraw = 0
     serial_buf = ""
+    sys.stdout.write("\033[2J\033[1;1H")
+    sys.stdout.flush()
     setup_scroll_region(2)
-    draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
+    draw_status(midi_name, port, baud, override_ch, override_inst,
+                last_channel, last_program, stdout_lock)
     try:
         while True:
             # Echo whatever the controller writes back (tx / send failed / hb).
@@ -339,7 +399,8 @@ def main() -> None:
             if not select.select([sys.stdin], [], [], 0.1)[0]:
                 now = time.monotonic()
                 if now - last_redraw >= 2.0:
-                    draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
+                    draw_status(midi_name, port, baud, override_ch, override_inst,
+                                last_channel, last_program, stdout_lock)
                     last_redraw = now
                 continue
             ch = sys.stdin.read(1)
@@ -348,7 +409,9 @@ def main() -> None:
                 break
             if ch in ("m", "M"):
                 # Restore canonical mode so the menu's input() works.
+                # Disable MIDI callback so messages don't corrupt the menu display.
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                inport.callback = None
                 try:
                     midi_names, serial_names = detected()
                     new_midi, new_port, new_baud = select_ports(
@@ -365,26 +428,28 @@ def main() -> None:
                             with lock:
                                 state["ser"] = None
                                 ser.close()
-                            inport.callback = None
                             inport.close()
                             inport, ser = new_inport, new_ser
                             with lock:
                                 state["ser"] = ser
-                            inport.callback = on_message
                             midi_name, port, baud = new_midi, new_port, new_baud
                             save_settings(config, {
                                 "midi_input": midi_name,
                                 "serial_port": port,
                                 "baud": baud,
                             })
-                            draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
                 finally:
+                    inport.callback = on_message
                     tty.setraw(fd)
+                draw_status(midi_name, port, baud, override_ch, override_inst,
+                            last_channel, last_program, stdout_lock)
             if ch in ("s", "S"):
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                inport.callback = None
                 try:
                     target = input("Settings mode for leaf id [all]: ").strip()
                 finally:
+                    inport.callback = on_message
                     tty.setraw(fd)
                 cmd = "settings\n"
                 if target:
@@ -397,12 +462,15 @@ def main() -> None:
                     s = state["ser"]
                     if s is not None:
                         s.write(cmd.encode())
-                draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
+                draw_status(midi_name, port, baud, override_ch, override_inst,
+                            last_channel, last_program, stdout_lock)
             if ch in ("c", "C"):
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                inport.callback = None
                 try:
                     raw = input("Channel [0-15, empty=reset]: ").strip()
                 finally:
+                    inport.callback = on_message
                     tty.setraw(fd)
                 if raw:
                     try:
@@ -415,12 +483,15 @@ def main() -> None:
                         print("invalid input")
                 else:
                     override_ch = None
-                draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
+                draw_status(midi_name, port, baud, override_ch, override_inst,
+                            last_channel, last_program, stdout_lock)
             if ch in ("i", "I"):
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                inport.callback = None
                 try:
                     raw = input("Instrument [0-127, empty=reset]: ").strip()
                 finally:
+                    inport.callback = on_message
                     tty.setraw(fd)
                 if raw:
                     try:
@@ -438,7 +509,8 @@ def main() -> None:
                         print("invalid input")
                 else:
                     override_inst = None
-                draw_status(midi_name, port, baud, override_ch, override_inst, stdout_lock)
+                draw_status(midi_name, port, baud, override_ch, override_inst,
+                            last_channel, last_program, stdout_lock)
             if ch in ("p", "P"):
                 with lock:
                     s = state["ser"]
@@ -455,6 +527,41 @@ def main() -> None:
                         s = state["ser"]
                         if s is not None:
                             s.write(f"noff {target}\n".encode())
+            if ch in ("b", "B"):
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                inport.callback = None
+                try:
+                    raw = input(f"Baud rate [{baud}]: ").strip()
+                finally:
+                    inport.callback = on_message
+                    tty.setraw(fd)
+                if raw:
+                    try:
+                        new_baud = int(raw)
+                        if new_baud > 0:
+                            with lock:
+                                state["ser"] = None
+                                ser.close()
+                            try:
+                                ser = serial.Serial(port, new_baud, timeout=0)
+                            except OSError:
+                                print(f"could not open {port} at {new_baud}")
+                                ser = serial.Serial(port, baud, timeout=0)
+                            else:
+                                baud = new_baud
+                                save_settings(config, {
+                                    "midi_input": midi_name,
+                                    "serial_port": port,
+                                    "baud": baud,
+                                })
+                            with lock:
+                                state["ser"] = ser
+                        else:
+                            print("baud rate must be positive")
+                    except ValueError:
+                        print("invalid input")
+                draw_status(midi_name, port, baud, override_ch, override_inst,
+                            last_channel, last_program, stdout_lock)
     except KeyboardInterrupt:
         pass
     finally:
