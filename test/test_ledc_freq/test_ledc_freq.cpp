@@ -15,16 +15,22 @@ void test_every_midi_note_has_valid_resolution(void) {
 }
 
 void test_resolution_boundaries(void) {
-    TEST_ASSERT_EQUAL_UINT8(14, ledc_resolution_for(TEST_XTAL, 8));      // note 0
-    TEST_ASSERT_EQUAL_UINT8(14, ledc_resolution_for(TEST_XTAL, 147));    // note 50
-    TEST_ASSERT_EQUAL_UINT8(14, ledc_resolution_for(TEST_XTAL, 156));    // note 51
-    TEST_ASSERT_EQUAL_UINT8(14, ledc_resolution_for(TEST_XTAL, 2349));   // note 98
-    TEST_ASSERT_EQUAL_UINT8(13, ledc_resolution_for(TEST_XTAL, 2489));   // note 99
-    TEST_ASSERT_EQUAL_UINT8(13, ledc_resolution_for(TEST_XTAL, 4699));   // note 110
-    TEST_ASSERT_EQUAL_UINT8(12, ledc_resolution_for(TEST_XTAL, 4978));   // note 111
-    TEST_ASSERT_EQUAL_UINT8(12, ledc_resolution_for(TEST_XTAL, 9397));   // note 122
-    TEST_ASSERT_EQUAL_UINT8(11, ledc_resolution_for(TEST_XTAL, 9956));   // note 123
-    TEST_ASSERT_EQUAL_UINT8(11, ledc_resolution_for(TEST_XTAL, 12544));  // note 127
+    // Lowest valid resolution wins: high notes use 8 bits (fine pitch), low
+    // notes raise only as far as needed to fit the LEDC divider.
+    TEST_ASSERT_EQUAL_UINT8(13, ledc_resolution_for(TEST_XTAL, 8));      // note 0
+    TEST_ASSERT_EQUAL_UINT8(13, ledc_resolution_for(TEST_XTAL, 9));      // note 2
+    TEST_ASSERT_EQUAL_UINT8(12, ledc_resolution_for(TEST_XTAL, 10));     // note 3
+    TEST_ASSERT_EQUAL_UINT8(12, ledc_resolution_for(TEST_XTAL, 19));     // note 15
+    TEST_ASSERT_EQUAL_UINT8(11, ledc_resolution_for(TEST_XTAL, 21));     // note 16
+    TEST_ASSERT_EQUAL_UINT8(11, ledc_resolution_for(TEST_XTAL, 37));     // note 26
+    TEST_ASSERT_EQUAL_UINT8(10, ledc_resolution_for(TEST_XTAL, 39));     // note 27
+    TEST_ASSERT_EQUAL_UINT8(10, ledc_resolution_for(TEST_XTAL, 73));     // note 38
+    TEST_ASSERT_EQUAL_UINT8(9,  ledc_resolution_for(TEST_XTAL, 78));     // note 39
+    TEST_ASSERT_EQUAL_UINT8(9,  ledc_resolution_for(TEST_XTAL, 147));    // note 50
+    TEST_ASSERT_EQUAL_UINT8(8,  ledc_resolution_for(TEST_XTAL, 156));    // note 51
+    TEST_ASSERT_EQUAL_UINT8(8,  ledc_resolution_for(TEST_XTAL, 165));    // note 52
+    TEST_ASSERT_EQUAL_UINT8(8,  ledc_resolution_for(TEST_XTAL, 2349));   // note 98
+    TEST_ASSERT_EQUAL_UINT8(8,  ledc_resolution_for(TEST_XTAL, 12544));  // note 127
 }
 
 void test_zero_and_tiny_freq_return_zero(void) {
