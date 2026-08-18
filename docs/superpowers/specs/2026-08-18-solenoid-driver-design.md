@@ -69,7 +69,8 @@ State machine (pure logic, header-only like the rest of `lib/reduzent/`):
 
 - GPIO 4 — a plain GPIO on the ESP32-C3 (not a strapping pin; the piezo already
   uses GPIO 3).
-- LEDC: one channel + one timer separate from the piezo's (channel 1, timer 1).
+- LEDC: one channel + one timer separate from the piezo's (channel 2, timer 1 —
+  the Arduino core maps `timer = (chan/2) % 4`, so channel 2 is timer 1).
   Rationale: LEDC frequency is a per-timer property; the piezo retunes its timer
   on every note and must not disturb the solenoid's fixed ~20 kHz. A leaf hosts
   exactly one actuator today, so they never run concurrently, but the
@@ -83,7 +84,7 @@ State machine (pure logic, header-only like the rest of `lib/reduzent/`):
 ## Files
 
 - Create `lib/reduzent/solenoid.h` — the pure state machine (TDD, native tests).
-- Modify `src/leaf_main.cpp` — `#define`s (pin 4, channel 1, timer 1, note, hold
+- Modify `src/leaf_main.cpp` — `#define`s (pin 4, channel 2, timer 1, note, hold
   duration), the `EVENT_NOTE` handler to consult the solenoid for matching
   notes, and a hold-expiry check in `loop()`.
 - Create `test/test_solenoid/test_solenoid.cpp` — Unity tests for the pure

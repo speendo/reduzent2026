@@ -7,6 +7,7 @@
 
 #include "espnow_frame.h"
 #include "note_freq.h"
+#include "ledc_freq.h"
 #include "envelope.h"
 #include "voice.h"
 #include "expression.h"
@@ -17,6 +18,7 @@
 #define PIEZO_PIN 3
 #define PWM_CHANNEL 0
 #define PWM_RES 8
+#define LEDC_XTAL_CLK_HZ 40000000  // C3 crystal; matches core's LEDC_USE_XTAL_CLK
 #define ESP_NOW_CHANNEL 13  // fixed WiFi channel; MUST stay 13 to match controller_main.cpp
 #define HEARTBEAT_MS 10000
 #define HEARTBEAT_JITTER_MS 1000
@@ -27,7 +29,7 @@
 // Solenoid leaf (percussive; see docs/leaf-spec.md §Solenoid driver).
 // GPIO 4 is a plain GPIO on the ESP32-C3 (piezo uses GPIO 3).
 #define SOLENOID_PIN 4
-#define SOLENOID_LEDC_CHANNEL 1
+#define SOLENOID_LEDC_CHANNEL 2  // (chan/2)%4 => channel 2 = timer 1, separate from piezo timer 0
 #define SOLENOID_LEDC_TIMER 1
 #define SOLENOID_FREQ 20000       // ~20 kHz carrier: duty controls coil current
 #define SOLENOID_NOTE 36          // note that triggers this solenoid (parasol later)
@@ -60,19 +62,26 @@ static int mono_note = 0xFF;             // path M note currently driving LEDC
 static uint32_t last_note_millis = 0;    // 0 = never played
 static bool played_since_hb = false;
 
+static uint8_t pwm_res = PWM_RES; // current LEDC duty resolution (bits); set by retune_ledc
+
 // Drive LEDC duty from a 0-127 amplitude, scaled by channel x poly aftertouch.
 static void set_duty(uint16_t level, uint8_t chan_p, uint8_t poly_p) {
     uint8_t aftertouch = scale_level(chan_p, poly_p); // compose channel x poly
     uint8_t scaled = scale_level((uint8_t)level, aftertouch);
-    ledcWrite(PWM_CHANNEL, (uint32_t)scaled << 1); // 7-bit -> 8-bit, max 254
+    ledcWrite(PWM_CHANNEL, (uint32_t)scaled << (pwm_res - 7)); // 7-bit -> pwm_res-bit
 }
 
-// Retune the LEDC frequency for a note (pitch bend + vibrato applied).
+// Retune the LEDC frequency for a note (pitch bend + vibrato applied), picking
+// the duty resolution that can represent it. Without this, notes below ~51
+// (147 Hz) overflow the LEDC divider and keep the previous note's frequency.
 static void retune_ledc(uint32_t now_ms, uint8_t note) {
     int16_t cents = pitch_bend_cents(pitch_bend, PITCH_BEND_RANGE)
                   + vibrato_cents(now_ms, cc1_vibrato);
     uint16_t freq = cents_to_freq(note_to_freq(note), cents);
-    ledcChangeFrequency(PWM_CHANNEL, freq, PWM_RES);
+    uint8_t res = ledc_resolution_for(LEDC_XTAL_CLK_HZ, freq);
+    if (res == 0) res = PWM_RES; // safety fallback if no resolution fits
+    pwm_res = res;
+    ledcChangeFrequency(PWM_CHANNEL, freq, res);
 }
 
 // Path A: advance ADSR every control tick and keep duty on the arpeggiated voice.

@@ -88,6 +88,8 @@ leaf firmware
 
 - Leaf converts note number to Hz via a 128-entry lookup table (uint16,
   `f = 440 · 2^((n-69)/12)`), 27.5 Hz – 12.5 kHz.
+- On the LEDC paths (A/M) the duty resolution is chosen per note (8–14 bits)
+  so the full 8 Hz–12.5 kHz table is representable.
 
 ## Solenoid driver
 
@@ -103,7 +105,7 @@ leaf firmware
   linear in duty).
 
 **Implemented defaults (pending parasol config slice):**
-- GPIO 4, LEDC channel 1, timer 1
+- GPIO 4, LEDC channel 2, timer 1
 - ~20 kHz carrier
 - `min_duty` / `max_duty` = 40 / 220 (8-bit scale)
 - `hold_ms` = 40
