@@ -9,13 +9,15 @@
 // Returns 1 and fills *out on success; 0 if blank/unrecognized/out of range.
 // Commands: n <ch> <note> <vel> | x <ch> <note> | p <ch> <bend>
 //           a <ch> <pressure> | pa <ch> <note> <pressure>
-//           g <ch> <program> | v <ch> <depth> | panic | settings [<id>]
+//           g <ch> <program> | v <ch> <depth> | panic [<ch>] | noff [<ch>]
+//           resetcc [<ch>] | settings [<id>]
 // Order matters: "panic" and "pa" are checked before "p".
 static inline int parse_command(const char* line, espnow_frame_t* out) {
     if (!line || !out) return 0;
 
     if (line[0] == 'p' && line[1] == 'a' && line[2] == 'n' &&
-        line[3] == 'i' && line[4] == 'c') {
+        line[3] == 'i' && line[4] == 'c' &&
+        (line[5] == '\0' || line[5] == ' ' || line[5] == '\n')) {
         int ch;
         out->channel = ESP_NOW_CHANNEL_BROADCAST;
         out->type = EVENT_PANIC;
@@ -29,7 +31,8 @@ static inline int parse_command(const char* line, espnow_frame_t* out) {
         return 1;
     }
 
-    if (line[0] == 'n' && line[1] == 'o' && line[2] == 'f' && line[3] == 'f') {
+    if (line[0] == 'n' && line[1] == 'o' && line[2] == 'f' && line[3] == 'f' &&
+        (line[4] == '\0' || line[4] == ' ' || line[4] == '\n')) {
         int ch;
         out->channel = ESP_NOW_CHANNEL_BROADCAST;
         out->type = EVENT_NOTES_OFF;
@@ -44,7 +47,8 @@ static inline int parse_command(const char* line, espnow_frame_t* out) {
     }
 
     if (line[0] == 'r' && line[1] == 'e' && line[2] == 's' &&
-        line[3] == 'e' && line[4] == 't' && line[5] == 'c' && line[6] == 'c') {
+        line[3] == 'e' && line[4] == 't' && line[5] == 'c' && line[6] == 'c' &&
+        (line[7] == '\0' || line[7] == ' ' || line[7] == '\n')) {
         int ch;
         out->channel = ESP_NOW_CHANNEL_BROADCAST;
         out->type = EVENT_RESET_CONTROLLERS;
@@ -60,7 +64,8 @@ static inline int parse_command(const char* line, espnow_frame_t* out) {
 
     if (line[0] == 's' && line[1] == 'e' && line[2] == 't' &&
         line[3] == 't' && line[4] == 'i' && line[5] == 'n' &&
-        line[6] == 'g' && line[7] == 's') {
+        line[6] == 'g' && line[7] == 's' &&
+        (line[8] == '\0' || line[8] == ' ' || line[8] == '\n')) {
         int id;
         out->channel = ESP_NOW_CHANNEL_BROADCAST; // always broadcast
         out->type = EVENT_ENTER_SETTINGS;

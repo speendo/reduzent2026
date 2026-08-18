@@ -172,6 +172,10 @@ void test_rejects(void) {
     TEST_ASSERT_EQUAL(0, parse_command("panic 99\n", &f));
     TEST_ASSERT_EQUAL(0, parse_command("noff 99\n", &f));
     TEST_ASSERT_EQUAL(0, parse_command("resetcc 99\n", &f));
+    TEST_ASSERT_EQUAL(0, parse_command("nofffoo\n", &f));     // noff must end at word boundary
+    TEST_ASSERT_EQUAL(0, parse_command("panicfoo\n", &f));    // panic must end at word boundary
+    TEST_ASSERT_EQUAL(0, parse_command("resetccfoo\n", &f));  // resetcc must end at word boundary
+    TEST_ASSERT_EQUAL(0, parse_command("settingsfoo\n", &f)); // settings must end at word boundary
 }
 
 int main(void) {
