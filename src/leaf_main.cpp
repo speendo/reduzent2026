@@ -23,6 +23,7 @@
 #define ARP_TICK_MS 16     // ~60 Hz: arpeggio index + frequency retune
 #define PITCH_BEND_RANGE 2 // +/- semitones (leaf-spec default)
 #define STUCK_NOTE_TIMEOUT_MS 3000
+#define NUM_NOTES 128         // MIDI note count; poly_pressure table size
 
 // Render paths: B = 1-bit 32 kHz mixer, A = LEDC arpeggio, M = LEDC monophonic.
 typedef enum { RENDER_1BIT = 0, RENDER_ARPEGGIO = 1, RENDER_MONO = 2 } render_path_t;
@@ -35,7 +36,7 @@ static render_path_t render_path = RENDER_1BIT;
 static uint16_t pitch_bend = PITCH_BEND_CENTER;
 static uint8_t chan_pressure = 127;      // 127 = full amplitude
 static uint8_t cc1_vibrato = 0;
-static uint8_t poly_pressure[128];       // per-note aftertouch, 127 = full
+static uint8_t poly_pressure[NUM_NOTES]; // per-note aftertouch, 127 = full
 
 static int arp_index = -1;               // current arpeggiated voice, -1 = none
 static uint32_t last_arp_ms = 0;
@@ -225,7 +226,7 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
             pitch_bend = PITCH_BEND_CENTER;
             cc1_vibrato = 0;
             chan_pressure = 127;
-            for (int i = 0; i < 128; i++) poly_pressure[i] = 127;
+            for (int i = 0; i < NUM_NOTES; i++) poly_pressure[i] = 127;
             break;
         case EVENT_PANIC:
             voice_table_init(&voices, &ENVELOPE_DEFAULT);
@@ -240,7 +241,7 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
 
 void setup() {
     Serial.begin(115200);
-    for (int i = 0; i < 128; i++) poly_pressure[i] = 127;
+    for (int i = 0; i < NUM_NOTES; i++) poly_pressure[i] = 127;
 
     voice_table_init(&voices, &ENVELOPE_DEFAULT);
 
