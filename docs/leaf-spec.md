@@ -103,7 +103,7 @@ leaf firmware
   linear in duty).
 
 **Implemented defaults (pending parasol config slice):**
-- GPIO 4, LEDC channel 1, timer 1
+- GPIO 4, LEDC channel 2, timer 1
 - ~20 kHz carrier
 - `min_duty` / `max_duty` = 40 / 220 (8-bit scale)
 - `hold_ms` = 40

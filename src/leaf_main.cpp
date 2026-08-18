@@ -27,7 +27,7 @@
 // Solenoid leaf (percussive; see docs/leaf-spec.md §Solenoid driver).
 // GPIO 4 is a plain GPIO on the ESP32-C3 (piezo uses GPIO 3).
 #define SOLENOID_PIN 4
-#define SOLENOID_LEDC_CHANNEL 1
+#define SOLENOID_LEDC_CHANNEL 2  // (chan/2)%4 => channel 2 = timer 1, separate from piezo timer 0
 #define SOLENOID_LEDC_TIMER 1
 #define SOLENOID_FREQ 20000       // ~20 kHz carrier: duty controls coil current
 #define SOLENOID_NOTE 36          // note that triggers this solenoid (parasol later)
