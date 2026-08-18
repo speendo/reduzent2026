@@ -88,6 +88,8 @@ leaf firmware
 
 - Leaf converts note number to Hz via a 128-entry lookup table (uint16,
   `f = 440 · 2^((n-69)/12)`), 27.5 Hz – 12.5 kHz.
+- On the LEDC paths (A/M) the duty resolution is chosen per note (8–14 bits)
+  so the full 8 Hz–12.5 kHz table is representable.
 
 ## Solenoid driver
 
