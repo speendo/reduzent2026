@@ -30,7 +30,7 @@
 #define SOLENOID_LEDC_CHANNEL 1
 #define SOLENOID_LEDC_TIMER 1
 #define SOLENOID_FREQ 20000       // ~20 kHz carrier: duty controls coil current
-#define SOLENOID_NOTE 60          // note that triggers this solenoid (parasol later)
+#define SOLENOID_NOTE 36          // note that triggers this solenoid (parasol later)
 #define SOLENOID_HOLD_MS 40       // strike window; exceeds pull-in time
 #define SOLENOID_DUTY_MIN 40      // velocity 1 (0-255)
 #define SOLENOID_DUTY_MAX 220     // velocity 127 (0-255)
