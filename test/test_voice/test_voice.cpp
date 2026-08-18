@@ -237,6 +237,23 @@ void test_watchdog_refresh_prevents_release(void) {
     TEST_ASSERT_EQUAL(ENV_STAGE_RELEASE, vt.voices[0].stage);
 }
 
+void test_steal_sets_hold_refresh_for_watchdog(void) {
+    voice_table_t vt;
+    init(&vt);
+    for (int i = 0; i < MAX_VOICES; i++) voice_note_on(&vt, (uint8_t)(60 + i), 100, 0);
+    voice_tick(&vt, 0);     // attack 0 -> decay
+    voice_tick(&vt, 1000);  // decay 1000 -> sustain
+    int idx = voice_note_on(&vt, 80, 100, 5000); // all 8 busy -> steal one
+    TEST_ASSERT_EQUAL_UINT32(5000, vt.voices[idx].hold_refresh_ms);
+    voice_tick(&vt, 5000);  // stolen voice: attack 0 -> decay
+    voice_tick(&vt, 6000);  // stolen voice: decay 1000 -> sustain
+    TEST_ASSERT_EQUAL(ENV_STAGE_SUSTAIN, vt.voices[idx].stage);
+    voice_watchdog(&vt, 6000, 3000); // 6000-5000 = 1000 < 3000: must NOT release
+    TEST_ASSERT_EQUAL(ENV_STAGE_SUSTAIN, vt.voices[idx].stage);
+    voice_watchdog(&vt, 8000, 3000); // 8000-5000 = 3000 >= 3000: now release
+    TEST_ASSERT_EQUAL(ENV_STAGE_RELEASE, vt.voices[idx].stage);
+}
+
 void test_all_notes_off_releases_all(void) {
     voice_table_t vt;
     init(&vt);
@@ -274,6 +291,7 @@ int main(void) {
     RUN_TEST(test_note_hold_starts_missing);
     RUN_TEST(test_watchdog_releases_stuck_sustain);
     RUN_TEST(test_watchdog_refresh_prevents_release);
+    RUN_TEST(test_steal_sets_hold_refresh_for_watchdog);
     RUN_TEST(test_all_notes_off_releases_all);
     return UNITY_END();
 }
