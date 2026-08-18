@@ -102,6 +102,12 @@ leaf firmware
 - Velocity→duty lookup table calibrated on hardware (solenoid force is not
   linear in duty).
 
+**Implemented defaults (pending parasol config slice):**
+- GPIO 4, LEDC channel 1, timer 1
+- ~20 kHz carrier
+- `min_duty` / `max_duty` = 40 / 220 (8-bit scale)
+- `hold_ms` = 40
+
 ## Settings / live mode
 
 - Live = default: ESP-NOW receive + actuator, plus a heartbeat broadcast every
