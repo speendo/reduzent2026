@@ -13,29 +13,21 @@
 #include "expression.h"
 #include "mixer.h"
 #include "solenoid.h"
+#include "config.h"
 
-#define MY_CHANNEL 0       // TODO: parasol config (later slice)
-#define PIEZO_PIN 3
 #define PWM_CHANNEL 0
 #define PWM_RES 8
 #define LEDC_XTAL_CLK_HZ 40000000  // C3 crystal; matches core's LEDC_USE_XTAL_CLK
-#define ESP_NOW_CHANNEL 13  // fixed WiFi channel; MUST stay 13 to match controller_main.cpp
 #define HEARTBEAT_MS 10000
 #define HEARTBEAT_JITTER_MS 1000
 
 #define ARP_TICK_MS 16     // ~60 Hz: arpeggio index + frequency retune
-#define PITCH_BEND_RANGE 2 // +/- semitones (leaf-spec default)
 #define STUCK_NOTE_TIMEOUT_MS 3000
 // Solenoid leaf (percussive; see docs/leaf-spec.md §Solenoid driver).
 // GPIO 4 is a plain GPIO on the ESP32-C3 (piezo uses GPIO 3).
-#define SOLENOID_PIN 4
 #define SOLENOID_LEDC_CHANNEL 2  // (chan/2)%4 => channel 2 = timer 1, separate from piezo timer 0
 #define SOLENOID_LEDC_TIMER 1
 #define SOLENOID_FREQ 20000       // ~20 kHz carrier: duty controls coil current
-#define SOLENOID_NOTE 36          // note that triggers this solenoid (parasol later)
-#define SOLENOID_HOLD_MS 40       // strike window; exceeds pull-in time
-#define SOLENOID_DUTY_MIN 40      // velocity 1 (0-255)
-#define SOLENOID_DUTY_MAX 220     // velocity 127 (0-255)
 #define NUM_NOTES 128         // MIDI note count; poly_pressure table size
 
 // Render paths: B = 1-bit 32 kHz mixer, A = LEDC arpeggio, M = LEDC monophonic.
@@ -45,6 +37,8 @@ static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 static voice_table_t voices;
 static solenoid_t solenoid;
+static leaf_config_t cfg;          // loaded from NVS in setup(); defaults if none
+static envelope_params_t env;      // ADSR params built from cfg at boot
 
 static render_path_t render_path = RENDER_1BIT;
 static uint16_t pitch_bend = PITCH_BEND_CENTER;
@@ -75,7 +69,7 @@ static void set_duty(uint16_t level, uint8_t chan_p, uint8_t poly_p) {
 // the duty resolution that can represent it. Without this, notes below ~51
 // (147 Hz) overflow the LEDC divider and keep the previous note's frequency.
 static void retune_ledc(uint32_t now_ms, uint8_t note) {
-    int16_t cents = pitch_bend_cents(pitch_bend, PITCH_BEND_RANGE)
+    int16_t cents = pitch_bend_cents(pitch_bend, cfg.piezo_pitch_bend_range)
                   + vibrato_cents(now_ms, cc1_vibrato);
     uint16_t freq = cents_to_freq(note_to_freq(note), cents);
     uint8_t res = ledc_resolution_for(LEDC_XTAL_CLK_HZ, freq);
@@ -128,7 +122,7 @@ static void render_mono_ctrl(uint32_t now_ms) {
 // Path B: 32 kHz ISR — XOR all active voices into the piezo GPIO. No float
 // math here: phase increments were precomputed by mixer_update_incs.
 static void IRAM_ATTR on_mixer_sample(void) {
-    digitalWrite(PIEZO_PIN, mix_voices(&voices, phase_inc));
+    digitalWrite(cfg.gpio_piezo, mix_voices(&voices, phase_inc));
 }
 
 // Path B: recompute per-voice phase increments (note + pitch bend + vibrato).
@@ -136,7 +130,7 @@ static void mixer_update_incs(uint32_t now_ms) {
     for (int i = 0; i < MAX_VOICES; i++) {
         voice_t* v = &voices.voices[i];
         if (!voice_is_active(v)) { phase_inc[i] = 0; continue; }
-        int16_t cents = pitch_bend_cents(pitch_bend, PITCH_BEND_RANGE)
+        int16_t cents = pitch_bend_cents(pitch_bend, cfg.piezo_pitch_bend_range)
                       + vibrato_cents(now_ms, cc1_vibrato);
         uint16_t freq = cents_to_freq(note_to_freq(v->note), cents);
         phase_inc[i] = phase_increment(freq, MIXER_SAMPLE_RATE);
@@ -151,9 +145,9 @@ static void render_1bit_ctrl(uint32_t now_ms) {
 
 // Detach LEDC and start the 32 kHz GPIO mixer (path B).
 static void enter_1bit(void) {
-    ledcDetachPin(PIEZO_PIN);
-    pinMode(PIEZO_PIN, OUTPUT);
-    digitalWrite(PIEZO_PIN, 0);
+    ledcDetachPin(cfg.gpio_piezo);
+    pinMode(cfg.gpio_piezo, OUTPUT);
+    digitalWrite(cfg.gpio_piezo, 0);
     mix_timer = timerBegin(0, 2, true);        // 80 MHz APB / 2 = 40 MHz tick (C3)
     timerAttachInterrupt(mix_timer, &on_mixer_sample, false);
     timerAlarmWrite(mix_timer, 1250, true);    // 40e6 / 1250 = 32 kHz
@@ -167,7 +161,7 @@ static void enter_ledc(void) {
         timerDetachInterrupt(mix_timer);
         mix_timer = NULL;
     }
-    ledcAttachPin(PIEZO_PIN, PWM_CHANNEL);
+    ledcAttachPin(cfg.gpio_piezo, PWM_CHANNEL);
     ledcWrite(PWM_CHANNEL, 0);
     arp_index = -1;
     mono_note = 0xFF;
@@ -201,7 +195,7 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
     if (len != ESP_NOW_FRAME_SIZE) return;
     espnow_frame_t frame;
     frame_unpack(data, &frame);
-    if (frame.channel != MY_CHANNEL && frame.channel != ESP_NOW_CHANNEL_BROADCAST) return;
+    if (frame.channel != cfg.channel && frame.channel != ESP_NOW_CHANNEL_BROADCAST) return;
 
     uint32_t now = millis();
     switch (frame.type) {
@@ -248,7 +242,7 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
             for (int i = 0; i < NUM_NOTES; i++) poly_pressure[i] = 127;
             break;
         case EVENT_PANIC:
-            voice_table_init(&voices, &ENVELOPE_DEFAULT);
+            voice_table_init(&voices, &env);
             arp_index = -1;
             mono_note = 0xFF;
             ledcWrite(PWM_CHANNEL, 0);
@@ -260,22 +254,28 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
 
 void setup() {
     Serial.begin(115200);
+    config_defaults(&cfg);
+    config_load("leaf_cfg", &cfg);
+    env.attack_ms = cfg.piezo_adsr_attack_ms;
+    env.decay_ms = cfg.piezo_adsr_decay_ms;
+    env.sustain_pct = cfg.piezo_adsr_sustain_pct;
+    env.release_ms = cfg.piezo_adsr_release_ms;
     for (int i = 0; i < NUM_NOTES; i++) poly_pressure[i] = 127;
 
-    voice_table_init(&voices, &ENVELOPE_DEFAULT);
+    voice_table_init(&voices, &env);
 
     ledcSetup(PWM_CHANNEL, 1000, PWM_RES);
-    ledcAttachPin(PIEZO_PIN, PWM_CHANNEL);
+    ledcAttachPin(cfg.gpio_piezo, PWM_CHANNEL);
     ledcWrite(PWM_CHANNEL, 0);
 
     ledcSetup(SOLENOID_LEDC_CHANNEL, SOLENOID_FREQ, PWM_RES);
-    ledcAttachPin(SOLENOID_PIN, SOLENOID_LEDC_CHANNEL);
+    ledcAttachPin(cfg.gpio_solenoid, SOLENOID_LEDC_CHANNEL);
     ledcWrite(SOLENOID_LEDC_CHANNEL, 0);
-    solenoid_init(&solenoid, SOLENOID_NOTE, SOLENOID_DUTY_MIN, SOLENOID_DUTY_MAX, SOLENOID_HOLD_MS);
+    solenoid_init(&solenoid, cfg.solenoid_note, cfg.solenoid_duty_min, cfg.solenoid_duty_max, cfg.solenoid_hold_ms);
 
     WiFi.mode(WIFI_STA);
     esp_wifi_set_ps(WIFI_PS_NONE);  // never modem-sleep; don't miss broadcasts
-    esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_channel(cfg.espnow_channel, WIFI_SECOND_CHAN_NONE);
     if (esp_now_init() != ESP_OK) {
         Serial.println("esp_now_init failed");
         return;
@@ -284,7 +284,7 @@ void setup() {
 
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, BROADCAST_MAC, 6);
-    peer.channel = ESP_NOW_CHANNEL;
+    peer.channel = cfg.espnow_channel;
     peer.ifidx = WIFI_IF_STA;
     if (esp_now_add_peer(&peer) != ESP_OK) {
         Serial.println("add_peer failed");
