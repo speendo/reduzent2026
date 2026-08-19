@@ -7,7 +7,29 @@ build on this module. See "Save format" in the MIDI looper design spec for
 the file format.
 """
 
+import os
+import re
+import select
+import sys
+import termios
+import threading
+import tty
 from dataclasses import dataclass, field
+from typing import Optional
+
+from reduzent_shared import (
+    DEFAULT_CONFIG,
+    load_settings,
+    menu_choice,
+    midi_to_command,
+    open_connections,
+    raw_terminal,
+    reset_scroll_region,
+    resolve_settings,
+    save_settings,
+    select_ports,
+    setup_scroll_region,
+)
 
 
 @dataclass
@@ -440,3 +462,42 @@ class Engine:
         self._last_phase = -1.0
         self._cycle = 0
         self._seam_pending.clear()
+
+
+LOOPS_DIR = os.path.join(os.path.expanduser("~"), ".config", "reduzent", "loops")
+
+
+def sanitize_name(name: str) -> str:
+    """Sanitize a loop name into a safe directory name ('' if empty)."""
+    clean = re.sub(r"[^a-z0-9_-]+", "-", name.lower())
+    clean = re.sub(r"-+", "-", clean).strip("-")
+    return clean
+
+
+def loop_path(base: str, name: str) -> str:
+    """Absolute path of `name`'s loop.loop file under `base`."""
+    return os.path.join(base, name, "loop.loop")
+
+
+def list_loop_names(base: str) -> list[str]:
+    """Sorted names of saved loops under `base` (directories holding loop.loop)."""
+    names = []
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return names
+    for entry in entries:
+        if os.path.isfile(loop_path(base, entry)):
+            names.append(entry)
+    return sorted(names)
+
+
+def save_loop_named(base: str, name: str, loop: Loop) -> None:
+    """Write `loop` to `<base>/<name>/loop.loop`, creating the directory."""
+    os.makedirs(os.path.join(base, name), exist_ok=True)
+    save_loop(loop_path(base, name), loop)
+
+
+def load_loop_named(base: str, name: str) -> Loop:
+    """Read `<base>/<name>/loop.loop`; raises ValueError on malformed content."""
+    return load_loop(loop_path(base, name))

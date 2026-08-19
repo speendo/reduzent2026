@@ -21,6 +21,11 @@ from looper import (
     save_loop,
     load_loop,
     Engine,
+    sanitize_name,
+    loop_path,
+    list_loop_names,
+    save_loop_named,
+    load_loop_named,
 )
 
 
@@ -764,6 +769,33 @@ class TestEngineRoundTrip(unittest.TestCase):
         eng.toggle(8.0)
         self.assertEqual(eng.loop.length, 4.0)
         self.assertEqual([e.seq for e in eng.loop.tracks[1].events], [2, 3])
+
+
+class TestRuntimeHelpers(unittest.TestCase):
+    def test_sanitize_name(self):
+        self.assertEqual(sanitize_name("My Jam!"), "my-jam")
+        self.assertEqual(sanitize_name("  spaces  here "), "spaces-here")
+        self.assertEqual(sanitize_name("a_b-c2"), "a_b-c2")
+        self.assertEqual(sanitize_name("!!!###"), "")
+
+    def test_loop_path(self):
+        self.assertEqual(loop_path("/base", "jam"), "/base/jam/loop.loop")
+
+    def test_named_save_load_and_list(self):
+        loop = Loop(length=4.0)
+        loop.tracks[0] = Track(events=[Event(phase=0.5, seq=0, cmd="n 0 60 100")])
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(list_loop_names(d), [])
+            save_loop_named(d, "jam1", loop)
+            save_loop_named(d, "jam2", loop)
+            os.makedirs(os.path.join(d, "notaloop"))  # no loop.loop: not listed
+            self.assertEqual(list_loop_names(d), ["jam1", "jam2"])
+            self.assertEqual(load_loop_named(d, "jam1"), loop)
+
+    def test_named_load_missing_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(FileNotFoundError):
+                load_loop_named(d, "missing")
 
 
 if __name__ == "__main__":
