@@ -282,7 +282,9 @@ static void exit_settings_mode(void) {
     memcpy(peer.peer_addr, BROADCAST_MAC, 6);
     peer.channel = cfg.espnow_channel;
     peer.ifidx = WIFI_IF_STA;
-    esp_now_add_peer(&peer);
+    if (esp_now_add_peer(&peer) != ESP_OK) {
+        Serial.println("esp_now_add_peer failed");
+    }
     if (render_path == RENDER_1BIT) enter_1bit();
 }
 
