@@ -10,8 +10,9 @@
 #include "espnow_frame.h"
 #include "text_parser.h"
 #include "held_notes.h"
+#include "config.h"
+#include "config_parser.h"
 
-#define ESP_NOW_CHANNEL 13  // fixed WiFi channel; must match every leaf
 #define KEEPALIVE_INTERVAL_MS 750  // X / Y (3000 / 4)
 #define LINE_BUF_LEN 64
 #define LINE_QUEUE_LEN 4
@@ -24,6 +25,7 @@ static SemaphoreHandle_t evt_sem = NULL;
 static char line_buf[LINE_BUF_LEN];
 static size_t line_len = 0;
 static held_notes_t held;
+static controller_config_t cfg;   // loaded from NVS in setup(); defaults if none
 
 // on_recv (WiFi task) may not do blocking serial I/O: buffer the frame, flag loop().
 static volatile bool rx_pending = false;
@@ -59,6 +61,16 @@ static void transmit_redundant(const espnow_frame_t* f, int copies) {
 }
 
 static void handle_line(const char* line) {
+    char out[128];
+    cfg_action_t action = config_handle_line(line, &cfg, out, sizeof(out));
+    if (action != CFG_NONE) {
+        if (action == CFG_SAVE && config_save("ctrl_cfg", &cfg) != 0) {
+            snprintf(out, sizeof(out), "error: save failed\n");
+        }
+        Serial.print(out);
+        return;
+    }
+
     espnow_frame_t frame;
     if (!parse_command(line, &frame)) return;
 
@@ -122,12 +134,14 @@ static void on_serial_rx(void) { drain_serial(); }
 
 void setup() {
     Serial.begin(115200);
+    config_defaults(&cfg);
+    config_load("ctrl_cfg", &cfg);
     line_q = xQueueCreate(LINE_QUEUE_LEN, LINE_BUF_LEN);
     evt_sem = xSemaphoreCreateBinary();
 
     WiFi.mode(WIFI_STA);
     esp_wifi_set_ps(WIFI_PS_NONE);  // never modem-sleep; keep broadcasts flowing
-    esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_channel(cfg.espnow_channel, WIFI_SECOND_CHAN_NONE);
     if (esp_now_init() != ESP_OK) {
         Serial.println("esp_now_init failed");
         return;
@@ -137,7 +151,7 @@ void setup() {
 
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, BROADCAST_MAC, 6);
-    peer.channel = ESP_NOW_CHANNEL;
+    peer.channel = cfg.espnow_channel;
     peer.ifidx = WIFI_IF_STA;
     if (esp_now_add_peer(&peer) != ESP_OK) {
         Serial.println("add_peer failed");
