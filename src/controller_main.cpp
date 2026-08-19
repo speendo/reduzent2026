@@ -10,6 +10,9 @@
 #include "espnow_frame.h"
 #include "text_parser.h"
 #include "held_notes.h"
+#include "mode.h"
+#include "ssid.h"
+#include "wifi_ap.h"
 #include "config.h"
 #include "config_parser.h"
 
@@ -26,6 +29,9 @@ static char line_buf[LINE_BUF_LEN];
 static size_t line_len = 0;
 static held_notes_t held;
 static controller_config_t cfg;   // loaded from NVS in setup(); defaults if none
+static mode_state_t dev_mode;          // settings/live state machine
+static char ap_ssid[32];               // settings-mode AP SSID
+static device_mode_t last_hw_mode = MODE_LIVE;  // WiFi/ESP-NOW state matching dev_mode.mode
 
 // on_recv (WiFi task) may not do blocking serial I/O: buffer the frame, flag loop().
 static volatile bool rx_pending = false;
@@ -86,6 +92,10 @@ static void handle_line(const char* line) {
             else held_clear_channel(&held, frame.channel);
             transmit_redundant(&frame, 3);
             break;
+        case EVENT_ENTER_SETTINGS:
+            transmit(&frame);           // broadcast/target leaves (was the default case)
+            mode_enter_settings(&dev_mode, millis());
+            break;
         default:
             transmit(&frame);
             break;
@@ -132,6 +142,26 @@ static void on_serial_event(void* arg, esp_event_base_t base, int32_t event_id, 
 static void on_serial_rx(void) { drain_serial(); }
 #endif
 
+// Live -> Settings: bring up the controller's own settings AP.
+static void enter_settings_mode(void) {
+    wifi_ap_start(ap_ssid, cfg.espnow_channel);
+}
+
+// Settings -> Live: tear down the AP and restore ESP-NOW for live operation.
+static void exit_settings_mode(void) {
+    wifi_ap_stop();
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("esp_now_init failed");
+    }
+    esp_now_register_send_cb(on_send);
+    esp_now_register_recv_cb(on_recv);
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, BROADCAST_MAC, 6);
+    peer.channel = cfg.espnow_channel;
+    peer.ifidx = WIFI_IF_STA;
+    esp_now_add_peer(&peer);
+}
+
 void setup() {
     Serial.begin(115200);
     config_defaults(&cfg);
@@ -140,6 +170,7 @@ void setup() {
     evt_sem = xSemaphoreCreateBinary();
 
     WiFi.mode(WIFI_STA);
+    wifi_set_country("EU");
     esp_wifi_set_ps(WIFI_PS_NONE);  // never modem-sleep; keep broadcasts flowing
     esp_wifi_set_channel(cfg.espnow_channel, WIFI_SECOND_CHAN_NONE);
     if (esp_now_init() != ESP_OK) {
@@ -164,6 +195,13 @@ void setup() {
 #endif
 
     held_notes_init(&held);
+    mode_init(&dev_mode, (uint32_t)cfg.settings_window_sec * 1000);
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    ssid_build(ap_ssid, sizeof(ap_ssid), 1, 0, mac);
+    if (mode_boot(&dev_mode, millis())) enter_settings_mode();
+    last_hw_mode = dev_mode.mode;
+
     Serial.println("controller ready");
 }
 
@@ -190,22 +228,31 @@ void loop() {
 
     static uint32_t next_keepalive = 0; // first keepalive fires at boot (no-op)
     uint32_t now = millis();
-    if ((int32_t)(now - next_keepalive) >= 0) {
-        send_keepalive();
-        next_keepalive = now + KEEPALIVE_INTERVAL_MS;
+    mode_tick(&dev_mode, now);
+    if (dev_mode.mode != last_hw_mode) {
+        if (mode_is_settings(&dev_mode)) enter_settings_mode();
+        else exit_settings_mode();
+        last_hw_mode = dev_mode.mode;
     }
 
-    if (rx_pending) {
-        rx_pending = false;
-        if (rx_len == ESP_NOW_FRAME_SIZE && rx_frame.type == EVENT_HEARTBEAT) {
-            Serial.printf("hb %02x:%02x:%02x:%02x:%02x:%02x played=%u last=%us\n",
-                          rx_mac[0], rx_mac[1], rx_mac[2], rx_mac[3], rx_mac[4], rx_mac[5],
-                          (unsigned)rx_frame.note, (unsigned)rx_frame.value);
-        } else {
-            Serial.printf("rx len=%d type=%d mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
-                          rx_len,
-                          rx_len == ESP_NOW_FRAME_SIZE ? rx_frame.type : -1,
-                          rx_mac[0], rx_mac[1], rx_mac[2], rx_mac[3], rx_mac[4], rx_mac[5]);
+    if (!mode_is_settings(&dev_mode)) {
+        if ((int32_t)(now - next_keepalive) >= 0) {
+            send_keepalive();
+            next_keepalive = now + KEEPALIVE_INTERVAL_MS;
+        }
+
+        if (rx_pending) {
+            rx_pending = false;
+            if (rx_len == ESP_NOW_FRAME_SIZE && rx_frame.type == EVENT_HEARTBEAT) {
+                Serial.printf("hb %02x:%02x:%02x:%02x:%02x:%02x played=%u last=%us\n",
+                              rx_mac[0], rx_mac[1], rx_mac[2], rx_mac[3], rx_mac[4], rx_mac[5],
+                              (unsigned)rx_frame.note, (unsigned)rx_frame.value);
+            } else {
+                Serial.printf("rx len=%d type=%d mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+                              rx_len,
+                              rx_len == ESP_NOW_FRAME_SIZE ? rx_frame.type : -1,
+                              rx_mac[0], rx_mac[1], rx_mac[2], rx_mac[3], rx_mac[4], rx_mac[5]);
+            }
         }
     }
 
