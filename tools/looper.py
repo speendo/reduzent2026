@@ -565,3 +565,435 @@ def draw_status(port, baud, loop_name, engine, override_ch, last_channel,
         sys.stdout.write(f"\033[{rows};1H\033[2K{line2}")
         sys.stdout.write("\033[u")  # restore cursor
         sys.stdout.flush()
+
+
+def main() -> None:
+    import serial
+    import serial.tools.list_ports
+    import time
+    import mido
+
+    argv = sys.argv[1:]
+    config = DEFAULT_CONFIG
+    quiet = "--quiet" in argv
+    for i, a in enumerate(argv):
+        if a == "--config" and i + 1 < len(argv):
+            config = argv[i + 1]
+
+    def detected():
+        return (
+            mido.get_input_names(),
+            [p.device for p in serial.tools.list_ports.comports()],
+        )
+
+    if "--list" in argv:
+        print("MIDI inputs:")
+        for n in mido.get_input_names():
+            print(f"  - {n}")
+        print("Serial ports:")
+        for p in serial.tools.list_ports.comports():
+            print(f"  - {p.device} - {p.description}")
+        return
+
+    midi_names, serial_names = detected()
+    try:
+        midi_name, port, baud = select_ports(load_settings(config), midi_names, serial_names)
+    except KeyboardInterrupt:
+        return
+    if midi_name is None or port is None:
+        raise SystemExit("no MIDI input or serial port detected")
+    inport, ser = open_connections(midi_name, port, baud)
+    save_settings(config, {"midi_input": midi_name, "serial_port": port, "baud": baud})
+
+    # One shared lock guards the serial handle AND the engine: the MIDI callback
+    # (record + live forward), the scheduler thread (playback), and the hotkey
+    # handlers all touch the same model through it.
+    lock = threading.Lock()
+    stdout_lock = threading.Lock()
+    state = {"ser": ser}
+    write_error = False
+    override_ch = None
+    override_inst = None
+    last_channel = None
+    last_program = None
+    loop_name = None  # None == "no loop"; set by 'w'/'r'
+    engine = Engine()
+
+    def emit(cmd: str) -> None:
+        """Write one reduzent command to the serial port; reconnect on failure."""
+        nonlocal write_error
+        with lock:
+            s = state["ser"]
+            if s is None:
+                return
+            try:
+                s.write((cmd + "\n").encode())
+            except OSError:
+                if not write_error:
+                    write_error = True
+                    with stdout_lock:
+                        sys.stdout.write("serial write failed; will retry\r\n")
+                        sys.stdout.flush()
+                try:
+                    state["ser"] = None
+                    s.close()
+                except OSError:
+                    pass
+
+    def on_message(msg):
+        nonlocal last_channel
+        nonlocal last_program
+        cmd = midi_to_command(msg)
+        if cmd is None:
+            return
+        if msg.type in ("note_on", "note_off"):
+            last_channel = msg.channel
+        if msg.type == "program_change":
+            last_program = msg.program
+        if override_ch is not None or override_inst is not None:
+            parts = cmd.split()
+            if override_ch is not None:
+                if parts[0] in ("n", "x", "p", "a", "g", "v") and len(parts) >= 2:
+                    parts[1] = str(override_ch)
+                elif parts[0] == "pa" and len(parts) >= 3:
+                    parts[1] = str(override_ch)
+            if override_inst is not None and parts[0] == "g" and len(parts) >= 3:
+                parts[2] = str(override_inst)
+            cmd = " ".join(parts)
+        parts = cmd.split()
+        ch = int(parts[1]) if len(parts) >= 2 else 0
+        note = int(parts[2]) if len(parts) >= 3 and parts[0] in ("n", "x") else None
+        with lock:
+            engine.record(cmd, ch, note, time.monotonic())
+        emit(cmd)
+        if not quiet:
+            with stdout_lock:
+                sys.stdout.write(cmd + "\r\n")
+                sys.stdout.flush()
+
+    def scheduler(stop_event):
+        """Poll the engine's due events and emit them; deep-sleep only when idle."""
+        while not stop_event.is_set():
+            with lock:
+                now = time.monotonic()
+                due = engine.due(now)
+                idle = (
+                    engine.loop.length <= 0
+                    or not engine.loop.tracks
+                    or engine.halted
+                )
+            for e in due:
+                emit(e.cmd)
+            if idle:
+                stop_event.wait(0.05)  # no loop playing: stay dormant like the bridge
+            else:
+                time.sleep(0.001)  # loop playing: tight poll for timing accuracy
+
+    inport.callback = on_message
+
+    # Raw stdin so a single keypress is detected without Enter (Unix only).
+    fd = sys.stdin.fileno()
+    with raw_terminal(fd) as old:
+
+        last_redraw = 0
+        serial_buf = ""
+        sys.stdout.write("\033[2J\033[1;1H")
+        sys.stdout.flush()
+        setup_scroll_region(2)
+        draw_status(port, baud, loop_name, engine, override_ch,
+                    last_channel, override_inst, last_program, stdout_lock)
+        stop_event = threading.Event()
+        sched_thread = threading.Thread(target=scheduler, args=(stop_event,), daemon=True)
+        sched_thread.start()
+        try:
+            while True:
+                # Echo whatever the controller writes back (tx / send failed / hb).
+                with lock:
+                    s = state["ser"]
+                    if s is not None:
+                        try:
+                            data = s.read(256)
+                        except OSError:
+                            data = b""
+                        if data:
+                            serial_buf += data.decode("utf-8", errors="replace")
+                            # Write only complete lines (ending with \n).
+                            # Partial lines stay in the buffer until next read.
+                            while "\n" in serial_buf:
+                                line, serial_buf = serial_buf.split("\n", 1)
+                                out = line + "\r\n"
+                                if out.startswith("hb "):
+                                    out = f"\033[2;36m{out}\033[0m"
+                                with stdout_lock:
+                                    sys.stdout.write(out)
+                                    sys.stdout.flush()
+
+                # Auto-reopen the serial port after a dropped connection.
+                if state["ser"] is None:
+                    try:
+                        new_ser = serial.Serial(port, baud, timeout=0)
+                    except OSError:
+                        pass
+                    else:
+                        with lock:
+                            state["ser"] = new_ser
+                        write_error = False
+                        with stdout_lock:
+                            sys.stdout.write(f"reconnected to {port}\r\n")
+                            sys.stdout.flush()
+
+                if not select.select([sys.stdin], [], [], 0.1)[0]:
+                    now = time.monotonic()
+                    if now - last_redraw >= 2.0:
+                        draw_status(port, baud, loop_name, engine, override_ch,
+                                    last_channel, override_inst, last_program, stdout_lock)
+                        last_redraw = now
+                    continue
+                ch = sys.stdin.read(1)
+                if ch in ("\x03", "q", "Q"):
+                    if engine.recording:
+                        with stdout_lock:
+                            sys.stdout.write("finish or cancel the take first (space/d)\r\n")
+                            sys.stdout.flush()
+                    else:
+                        reset_scroll_region()
+                        break
+                if ch == " ":
+                    with lock:
+                        live = engine.toggle(time.monotonic())
+                    for c in live:
+                        emit(c)
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("d", "D"):
+                    with lock:
+                        if engine.recording:
+                            engine.cancel()
+                            live = []
+                        else:
+                            target = override_ch if override_ch is not None else last_channel
+                            live = engine.delete_track(target) if target is not None else []
+                    for c in live:
+                        emit(c)
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("x", "X"):
+                    with lock:
+                        target = override_ch if override_ch is not None else last_channel
+                        live = engine.toggle_mute(target) if target is not None else []
+                    for c in live:
+                        emit(c)
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("p", "P"):
+                    with lock:
+                        if engine.halted:
+                            engine.resume(time.monotonic())
+                            live = []
+                        else:
+                            live = engine.halt()
+                    for _ in range(3):  # panic sent 3x so the leaves reliably stop
+                        for c in live:
+                            emit(c)
+                if ch in ("o", "O"):
+                    target = override_ch if override_ch is not None else last_channel
+                    if target is None:
+                        with stdout_lock:
+                            sys.stdout.write("no active channel to silence\r\n")
+                            sys.stdout.flush()
+                    else:
+                        emit(f"noff {target}")
+                if ch in ("+", "="):
+                    with lock:
+                        engine.set_rate(engine.rate + 0.05)
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("-",):
+                    with lock:
+                        engine.set_rate(engine.rate - 0.05)
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch == "0":
+                    with lock:
+                        engine.set_rate(1.0)
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("c", "C"):
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    inport.callback = None
+                    try:
+                        raw = input("Channel [0-15, empty=reset]: ").strip()
+                    finally:
+                        inport.callback = on_message
+                        tty.setraw(fd)
+                    if raw:
+                        try:
+                            val = int(raw)
+                            if 0 <= val <= 15:
+                                override_ch = val
+                                engine.override_ch = val
+                            else:
+                                print("channel must be 0-15")
+                        except ValueError:
+                            print("invalid input")
+                    else:
+                        override_ch = None
+                        engine.override_ch = None
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("i", "I"):
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    inport.callback = None
+                    try:
+                        raw = input("Instrument [0-127, empty=reset]: ").strip()
+                    finally:
+                        inport.callback = on_message
+                        tty.setraw(fd)
+                    if raw:
+                        try:
+                            val = int(raw)
+                            if 0 <= val <= 127:
+                                override_inst = val
+                                # Send program change immediately to all leaves
+                                emit(f"g {override_ch if override_ch is not None else 0} {override_inst}")
+                            else:
+                                print("program must be 0-127")
+                        except ValueError:
+                            print("invalid input")
+                    else:
+                        override_inst = None
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("m", "M"):
+                    # Restore canonical mode so the menu's input() works.
+                    # Disable MIDI callback so messages don't corrupt the menu display.
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    inport.callback = None
+                    try:
+                        midi_names, serial_names = detected()
+                        new_midi, new_port, new_baud = select_ports(
+                            load_settings(config), midi_names, serial_names
+                        )
+                        if new_midi is None or new_port is None:
+                            print("no ports detected; keeping current connection")
+                        else:
+                            try:
+                                new_inport, new_ser = open_connections(new_midi, new_port, new_baud)
+                            except OSError:
+                                print("could not open new ports; keeping current connection")
+                            else:
+                                with lock:
+                                    state["ser"] = None
+                                    ser.close()
+                                inport.close()
+                                inport, ser = new_inport, new_ser
+                                with lock:
+                                    state["ser"] = ser
+                                midi_name, port, baud = new_midi, new_port, new_baud
+                                save_settings(config, {
+                                    "midi_input": midi_name,
+                                    "serial_port": port,
+                                    "baud": baud,
+                                })
+                    finally:
+                        inport.callback = on_message
+                        tty.setraw(fd)
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("s", "S"):
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    inport.callback = None
+                    try:
+                        target = input("Settings mode for leaf id [all]: ").strip()
+                    finally:
+                        inport.callback = on_message
+                        tty.setraw(fd)
+                    cmd = "settings"
+                    if target:
+                        try:
+                            int(target)
+                            cmd = f"settings {target}"
+                        except ValueError:
+                            cmd = "settings"
+                    emit(cmd)
+                    draw_status(port, baud, loop_name, engine, override_ch,
+                                last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("w", "W"):
+                    if engine.recording:
+                        with stdout_lock:
+                            sys.stdout.write("finish or cancel the take first (space/d)\r\n")
+                            sys.stdout.flush()
+                    else:
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                        inport.callback = None
+                        try:
+                            name = input("Loop name: ").strip()
+                        finally:
+                            inport.callback = on_message
+                            tty.setraw(fd)
+                        clean = sanitize_name(name)
+                        if not clean:
+                            print("no name given; save cancelled")
+                        else:
+                            try:
+                                save_loop_named(LOOPS_DIR, clean, engine.loop)
+                            except OSError as e:
+                                print(f"save failed: {e}")
+                            else:
+                                loop_name = clean
+                                print(f"saved {clean}")
+                        draw_status(port, baud, loop_name, engine, override_ch,
+                                    last_channel, override_inst, last_program, stdout_lock)
+                if ch in ("r", "R"):
+                    if engine.recording:
+                        with stdout_lock:
+                            sys.stdout.write("finish or cancel the take first (space/d)\r\n")
+                            sys.stdout.flush()
+                    else:
+                        names = list_loop_names(LOOPS_DIR)
+                        if not names:
+                            with stdout_lock:
+                                sys.stdout.write("no saved loops\r\n")
+                                sys.stdout.flush()
+                        else:
+                            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                            inport.callback = None
+                            try:
+                                chosen = menu_choice("Load loop:", names, loop_name)
+                            except KeyboardInterrupt:
+                                chosen = None
+                            finally:
+                                inport.callback = on_message
+                                tty.setraw(fd)
+                            if chosen is not None:
+                                try:
+                                    loop = load_loop_named(LOOPS_DIR, chosen)
+                                except (OSError, ValueError) as e:
+                                    print(f"load failed: {e}")
+                                else:
+                                    with lock:
+                                        loop.anchor = time.monotonic()  # start at phase 0
+                                        engine = Engine(loop)  # fresh seq + playback state
+                                        engine.override_ch = override_ch
+                                    loop_name = chosen
+                                    print(f"loaded {chosen}")
+                            draw_status(port, baud, loop_name, engine, override_ch,
+                                        last_channel, override_inst, last_program, stdout_lock)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            stop_event.set()
+            inport.callback = None
+            with lock:
+                state["ser"] = None
+                ser.close()
+            inport.close()
+            sched_thread.join(timeout=1.0)
+            reset_scroll_region()
+            # Clear screen and restore cursor to top-left on exit
+            sys.stdout.write("\033[2J\033[1;1H")
+            sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()
