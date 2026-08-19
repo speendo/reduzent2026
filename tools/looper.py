@@ -283,17 +283,43 @@ class Engine:
                 (end_t, Event(phase=stop_phase, seq=self._seq, cmd=f"x {k[0]} {k[1]}"))
             )
             self._seq += 1
-        events = [e for (t, e) in self._take_events]
+        final_start = end_t - length
+        kept = [e for (t, e) in self._take_events if t >= final_start]
+        kept = self._seam_close(self._take_events, kept)
         if self._take_fresh:
             self.loop.length = length
             self.loop.anchor = self._take_anchor
-        track = Track(events=sorted(events, key=lambda e: (e.phase, e.seq)))
+        track = Track(events=sorted(kept, key=lambda e: (e.phase, e.seq)))
         track.muted = self._old_muted if self._old_track is not None else False
         self.loop.tracks[self._take_ch] = track
         self._reset_playback()
         ch = self._take_ch
         self._clear_take()
         return [f"noff {ch}"]
+
+    def _seam_close(self, events, kept):
+        """Keep a note's on when its off survives the final pass but the on fell
+        before it (a note held across the over-record boundary)."""
+        kept_ids = {id(e) for e in kept}  # Event is unhashable: key by id()
+        keys = set()
+        for _, e in events:
+            k = _note_key(e.cmd)
+            if k is not None:
+                keys.add(k)
+        for k in keys:
+            note_events = sorted(
+                (e for _, e in events if _note_key(e.cmd) == k), key=lambda e: e.seq
+            )
+            last_on = None
+            for e in note_events:
+                if e.cmd.startswith("n"):
+                    last_on = e
+                else:
+                    if id(e) in kept_ids and last_on is not None and id(last_on) not in kept_ids:
+                        kept.append(last_on)
+                        kept_ids.add(id(last_on))
+                    last_on = None
+        return kept
 
     def _mute_for_take(self, ch):
         track = self.loop.tracks[ch]

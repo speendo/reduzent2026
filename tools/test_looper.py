@@ -469,5 +469,56 @@ class TestEngineReRecord(unittest.TestCase):
         )
 
 
+class TestEngineOverRecord(unittest.TestCase):
+    def _two_track_loop(self, eng):
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.5)
+        eng.record("x 0 60", 0, 60, 0.6)
+        eng.toggle(4.0)
+        eng.override_ch = 1
+        eng.toggle(6.0)
+        eng.record("n 1 72 90", 1, 72, 6.5)
+        eng.record("x 1 72", 1, 72, 6.7)
+        eng.toggle(8.0)
+
+    def test_final_pass_wins(self):
+        eng = Engine()
+        self._two_track_loop(eng)
+        self.assertEqual(eng.loop.length, 4.0)
+        eng.override_ch = 0
+        self.assertEqual(eng.toggle(10.0), ["noff 0"])  # overdub: 2 tracks remain
+        eng.record("n 0 60 100", 0, 60, 10.2)   # t 10.2, phase 0.2 - dropped
+        eng.record("x 0 60", 0, 60, 10.3)        # t 10.3, phase 0.3 - dropped
+        eng.record("n 0 65 100", 0, 65, 11.0)   # t 11.0, phase 3.0 - kept
+        eng.record("x 0 65", 0, 65, 11.1)        # t 11.1, phase 3.1 - kept
+        eng.record("n 0 60 100", 0, 60, 14.2)   # t 14.2, phase 2.2 - kept
+        eng.record("x 0 60", 0, 60, 14.3)        # t 14.3, phase 2.3 - kept
+        eng.toggle(14.5)                         # final_start = 14.5 - 4 = 10.5
+        self.assertEqual(
+            [(round(e.phase, 6), e.cmd)
+             for e in sorted(eng.loop.tracks[0].events, key=lambda e: e.phase)],
+            [
+                (2.2, "n 0 60 100"),
+                (2.3, "x 0 60"),
+                (3.0, "n 0 65 100"),
+                (3.1, "x 0 65"),
+            ],
+        )
+
+    def test_seam_note_held_across_wrap_kept(self):
+        eng = Engine()
+        self._two_track_loop(eng)
+        eng.override_ch = 0
+        eng.toggle(10.0)
+        eng.record("n 0 60 100", 0, 60, 10.05)  # t 10.05 < final_start 10.2: dropped
+        eng.toggle(14.2)                        # still held: closing x at stop phase 2.2
+        self.assertEqual(
+            [(round(e.phase, 6), e.cmd)
+             for e in sorted(eng.loop.tracks[0].events, key=lambda e: e.phase)],
+            [(2.05, "n 0 60 100"), (2.2, "x 0 60")],  # seam-close keeps the on
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
