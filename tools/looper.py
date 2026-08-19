@@ -28,3 +28,23 @@ class Loop:
     length: float = 0.0                                    # 0.0 == "no loop"
     tracks: dict[int, Track] = field(default_factory=dict)  # channel -> Track
     anchor: float | None = None  # time.monotonic() at phase 0; None == no loop
+
+
+def loop_to_text(loop: Loop) -> str:
+    """Serialize a Loop to the reduzent-loop v1 text format (deterministic).
+
+    `length` and every phase are written with microsecond precision (6 decimal
+    places). Muted tracks get one `mute <ch>` header line (channels sorted
+    ascending); events are written globally sorted by (seq, phase, cmd) across
+    all tracks. Every line ends with a newline.
+    """
+    lines = ["reduzent-loop v1", f"length {loop.length:.6f}"]
+    for ch in sorted(loop.tracks):
+        if loop.tracks[ch].muted:
+            lines.append(f"mute {ch}")
+    events = []
+    for track in loop.tracks.values():
+        events.extend(track.events)
+    for e in sorted(events, key=lambda e: (e.seq, e.phase, e.cmd)):
+        lines.append(f"{e.phase:.6f} {e.cmd}")
+    return "\n".join(lines) + "\n"
