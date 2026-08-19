@@ -198,6 +198,10 @@ class Engine:
     def recording(self):
         return self._recording
 
+    @property
+    def halted(self):
+        return self._halted
+
     def phase(self, now):
         self._last_now = now
         if self._halted:

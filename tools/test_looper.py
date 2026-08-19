@@ -564,6 +564,20 @@ class TestEngineRateHalt(unittest.TestCase):
         eng = Engine()
         eng.resume(1.0)
 
+    def test_halted_property(self):
+        eng = Engine()
+        self.assertFalse(eng.halted)
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.5)
+        eng.record("x 0 60", 0, 60, 0.6)
+        eng.toggle(4.0)
+        eng.phase(1.0)
+        eng.halt()
+        self.assertTrue(eng.halted)
+        eng.resume(5.0)
+        self.assertFalse(eng.halted)
+
 
 class TestEngineOverRecord(unittest.TestCase):
     def _two_track_loop(self, eng):
