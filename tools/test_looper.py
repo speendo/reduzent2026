@@ -20,6 +20,7 @@ from looper import (
     loop_from_text,
     save_loop,
     load_loop,
+    Engine,
 )
 
 
@@ -234,6 +235,72 @@ class TestSaveLoad(unittest.TestCase):
             self.assertTrue(os.path.isfile(path))
             restored = load_loop(path)
         self.assertEqual(restored, loop)
+
+
+
+class TestEngineFresh(unittest.TestCase):
+    def test_phase_none_without_loop(self):
+        eng = Engine()
+        self.assertIsNone(eng.phase(3.0))
+        self.assertFalse(eng.recording)
+
+    def test_fresh_recording_phases_length_anchor(self):
+        eng = Engine()
+        eng.override_ch = 0
+        self.assertEqual(eng.toggle(0.0), [])
+        self.assertTrue(eng.recording)
+        eng.record("n 0 60 100", 0, 60, 1.0)
+        eng.record("x 0 60", 0, 60, 1.5)
+        self.assertEqual(eng.toggle(4.0), ["noff 0"])
+        self.assertFalse(eng.recording)
+        self.assertEqual(eng.loop.length, 4.0)
+        self.assertEqual(eng.loop.anchor, 0.0)
+        self.assertEqual(
+            [(e.phase, e.cmd) for e in eng.loop.tracks[0].events],
+            [(1.0, "n 0 60 100"), (1.5, "x 0 60")],
+        )
+
+    def test_phase_during_loop(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.5)
+        eng.record("x 0 60", 0, 60, 0.6)
+        eng.toggle(4.0)
+        self.assertAlmostEqual(eng.phase(5.0), 1.0)
+        self.assertAlmostEqual(eng.phase(7.9), 3.9)
+
+    def test_held_note_closed_at_stop(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 1.0)
+        eng.record("n 0 64 100", 0, 64, 2.0)
+        eng.record("x 0 64", 0, 64, 2.5)
+        eng.toggle(4.0)
+        events = sorted(eng.loop.tracks[0].events, key=lambda e: e.phase)
+        self.assertEqual(
+            [e.cmd for e in events],
+            ["x 0 60", "n 0 60 100", "n 0 64 100", "x 0 64"],
+        )
+        self.assertEqual(events[0].phase, 0.0)
+
+    def test_empty_take_starts_no_loop(self):
+        eng = Engine()
+        eng.toggle(0.0)
+        self.assertEqual(eng.toggle(5.0), [])
+        self.assertEqual(eng.loop.length, 0.0)
+        self.assertEqual(eng.loop.tracks, {})
+        self.assertIsNone(eng.loop.anchor)
+
+    def test_empty_take_with_override_starts_no_loop(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        self.assertEqual(eng.toggle(5.0), [])
+        self.assertEqual(eng.loop.length, 0.0)
+        self.assertEqual(eng.loop.tracks, {})
+        self.assertIsNone(eng.loop.anchor)
 
 
 if __name__ == "__main__":

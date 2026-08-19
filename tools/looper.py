@@ -124,3 +124,144 @@ def load_loop(path: str) -> Loop:
     """Read a Loop from `path`; raises ValueError on malformed content."""
     with open(path) as f:
         return loop_from_text(f.read())
+
+
+CAPTURED = ("n", "x", "p", "a", "pa", "v")
+
+
+def _note_key(cmd):
+    """Return (channel, note) for a note command, else None."""
+    parts = cmd.split()
+    if len(parts) >= 3 and parts[0] in ("n", "x"):
+        return (int(parts[1]), int(parts[2]))
+    return None
+
+
+class Engine:
+    """Recording + playback-scheduling engine (slice 3).
+
+    A pure object driven by `now` values (monotonic seconds): no threads, no
+    I/O, no sleeps. The runtime (slice 4) feeds it real time and the
+    post-override reduzent command stream. Phases are master seconds at 1.0x;
+    `rate` applies only once a loop exists (overdub stamping and playback).
+    """
+
+    def __init__(self, loop=None):
+        self.loop = loop if loop is not None else Loop()
+        self.rate = 1.0
+        self.override_ch = None  # 'c' override; the runtime sets this
+        self._seq = 0
+        for track in self.loop.tracks.values():
+            for e in track.events:
+                self._seq = max(self._seq, e.seq + 1)
+        self._recording = False
+        self._take_ch = None
+        self._take_anchor = None
+        self._take_fresh = None
+        self._take_events = []  # [(take-time, Event)]
+        self._take_held = set()
+        self._old_track = None
+        self._old_track_ch = None
+        self._old_muted = None
+        self._speculative = False
+        self._speculative_ch = None
+        self._last_phase = -1.0
+        self._cycle = 0
+        self._seam_pending = {}  # (ch, note) -> (defer cycle, Event)
+        self._halted = False
+        self._halt_phase = None
+        self._last_now = None
+
+    @property
+    def recording(self):
+        return self._recording
+
+    def phase(self, now):
+        self._last_now = now
+        if self._halted:
+            return self._halt_phase
+        if self.loop.anchor is None or self.loop.length <= 0:
+            return None
+        return ((now - self.loop.anchor) * self.rate) % self.loop.length
+
+    def set_rate(self, rate):
+        self.rate = min(4.0, max(0.25, rate))
+
+    def toggle(self, now):
+        self._last_now = now
+        if self._halted:
+            return []  # space is inert while halted
+        if self._recording:
+            return self._stop_take(now)
+        return self._start_take(now)
+
+    def record(self, cmd, ch, note, now):
+        self._last_now = now
+        if not self._recording:
+            return
+        if ch != self._take_ch:
+            return
+        if note is not None and cmd.startswith("n"):
+            self._take_held.add((ch, note))
+        elif note is not None and cmd.startswith("x"):
+            self._take_held.discard((ch, note))
+        phase = now - self._take_anchor  # fresh take: phase = now - start
+        self._take_events.append((phase, Event(phase=phase, seq=self._seq, cmd=cmd)))
+        self._seq += 1
+
+    def cancel(self):
+        if self._recording:
+            self._discard_take()
+
+    # --- take lifecycle -------------------------------------------------
+
+    def _start_take(self, now):
+        self._recording = True
+        self._take_ch = self.override_ch
+        self._take_anchor = now
+        self._take_fresh = True
+        self._take_events = []
+        self._take_held = set()
+        return []
+
+    def _stop_take(self, now):
+        if self._take_ch is None or not self._take_events:
+            self._discard_take()  # empty take: nothing recorded, nothing committed
+            return []
+        length = now - self._take_anchor
+        for k in self._take_held:
+            self._take_events.append(
+                (length, Event(phase=0.0, seq=self._seq, cmd=f"x {k[0]} {k[1]}"))
+            )
+            self._seq += 1
+        events = [e for (t, e) in self._take_events]
+        self.loop.length = length
+        self.loop.anchor = self._take_anchor
+        self.loop.tracks[self._take_ch] = Track(
+            events=sorted(events, key=lambda e: (e.phase, e.seq))
+        )
+        self._reset_playback()
+        ch = self._take_ch
+        self._clear_take()
+        return [f"noff {ch}"]
+
+    def _discard_take(self):
+        self._clear_take()
+
+    def _clear_take(self):
+        self._recording = False
+        self._take_ch = None
+        self._take_anchor = None
+        self._take_fresh = None
+        self._take_events = []
+        self._take_held = set()
+        self._old_track = None
+        self._old_track_ch = None
+        self._old_muted = None
+        self._speculative = False
+        self._speculative_ch = None
+
+    def _reset_playback(self):
+        self._last_phase = -1.0
+        self._cycle = 0
+        self._seam_pending.clear()
