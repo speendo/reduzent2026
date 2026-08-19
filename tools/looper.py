@@ -112,3 +112,15 @@ def loop_from_text(text: str) -> Loop:
         if ch in loop.tracks:
             loop.tracks[ch].muted = True
     return loop
+
+
+def save_loop(path: str, loop: Loop) -> None:
+    """Write `loop` to `path` as reduzent-loop v1 text."""
+    with open(path, "w") as f:
+        f.write(loop_to_text(loop))
+
+
+def load_loop(path: str) -> Loop:
+    """Read a Loop from `path`; raises ValueError on malformed content."""
+    with open(path) as f:
+        return loop_from_text(f.read())

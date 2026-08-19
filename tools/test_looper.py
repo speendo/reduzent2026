@@ -8,9 +8,19 @@ Run:
     python3 tools/test_looper.py
 """
 
+import os
+import tempfile
 import unittest
 
-from looper import Event, Track, Loop, loop_to_text, loop_from_text
+from looper import (
+    Event,
+    Track,
+    Loop,
+    loop_to_text,
+    loop_from_text,
+    save_loop,
+    load_loop,
+)
 
 
 class TestModel(unittest.TestCase):
@@ -212,6 +222,18 @@ class TestRoundTrip(unittest.TestCase):
         loop.tracks[0] = Track(events=[Event(phase=0.123456, seq=0, cmd="n 0 60 100")])
         restored = loop_from_text(loop_to_text(loop))
         self.assertEqual(restored.tracks[0].events[0].phase, 0.123456)
+
+
+class TestSaveLoad(unittest.TestCase):
+    def test_save_load_round_trip(self):
+        loop = Loop(length=4.0)
+        loop.tracks[1] = Track(events=[Event(phase=0.25, seq=0, cmd="n 1 64 100")])
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "loop.loop")
+            save_loop(path, loop)
+            self.assertTrue(os.path.isfile(path))
+            restored = load_loop(path)
+        self.assertEqual(restored, loop)
 
 
 if __name__ == "__main__":
