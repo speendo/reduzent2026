@@ -199,14 +199,24 @@ class Engine:
         self._last_now = now
         if not self._recording:
             return
+        head = cmd.split(maxsplit=1)[0] if cmd else ""
+        if head not in CAPTURED:
+            return  # g / panic / noff / resetcc / settings are control, not content
+        if self._take_ch is None:
+            self._take_ch = ch  # lock the take to the first note's channel
         if ch != self._take_ch:
-            return
-        if note is not None and cmd.startswith("n"):
+            return  # single-channel take: other channels pass through live
+        if head == "n" and note is not None:
             self._take_held.add((ch, note))
-        elif note is not None and cmd.startswith("x"):
+        elif head == "x" and note is not None:
             self._take_held.discard((ch, note))
-        phase = now - self._take_anchor  # fresh take: phase = now - start
-        self._take_events.append((phase, Event(phase=phase, seq=self._seq, cmd=cmd)))
+        if self._take_fresh:
+            t = now - self._take_anchor
+            phase = t
+        else:
+            t = (now - self.loop.anchor) * self.rate
+            phase = t % self.loop.length
+        self._take_events.append((t, Event(phase=phase, seq=self._seq, cmd=cmd)))
         self._seq += 1
 
     def cancel(self):
@@ -216,10 +226,19 @@ class Engine:
     # --- take lifecycle -------------------------------------------------
 
     def _start_take(self, now):
+        ch = self.override_ch
+        if not self.loop.tracks:
+            fresh = True
+        elif len(self.loop.tracks) == 1 and ch is not None and ch in self.loop.tracks:
+            fresh = True  # lone-track overwrite: fresh length
+        elif ch is None and len(self.loop.tracks) == 1:
+            fresh = True  # the survivor is being replaced -> fresh length
+        else:
+            fresh = False  # loop exists: overdub against the current length
         self._recording = True
-        self._take_ch = self.override_ch
+        self._take_ch = ch
         self._take_anchor = now
-        self._take_fresh = True
+        self._take_fresh = fresh
         self._take_events = []
         self._take_held = set()
         return []
@@ -228,18 +247,26 @@ class Engine:
         if self._take_ch is None or not self._take_events:
             self._discard_take()  # empty take: nothing recorded, nothing committed
             return []
-        length = now - self._take_anchor
+        if self._take_fresh:
+            length = now - self._take_anchor
+            end_t = length
+            stop_phase = 0.0  # closing notes land at phase 0 -> clamped full-length
+        else:
+            length = self.loop.length
+            end_t = (now - self.loop.anchor) * self.rate
+            stop_phase = end_t % length
         for k in self._take_held:
             self._take_events.append(
-                (length, Event(phase=0.0, seq=self._seq, cmd=f"x {k[0]} {k[1]}"))
+                (end_t, Event(phase=stop_phase, seq=self._seq, cmd=f"x {k[0]} {k[1]}"))
             )
             self._seq += 1
         events = [e for (t, e) in self._take_events]
-        self.loop.length = length
-        self.loop.anchor = self._take_anchor
         self.loop.tracks[self._take_ch] = Track(
             events=sorted(events, key=lambda e: (e.phase, e.seq))
         )
+        if self._take_fresh:
+            self.loop.length = length
+            self.loop.anchor = self._take_anchor
         self._reset_playback()
         ch = self._take_ch
         self._clear_take()

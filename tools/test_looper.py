@@ -303,5 +303,52 @@ class TestEngineFresh(unittest.TestCase):
         self.assertIsNone(eng.loop.anchor)
 
 
+class TestEngineOverdub(unittest.TestCase):
+    def _fresh(self, eng):
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.5)
+        eng.record("x 0 60", 0, 60, 0.6)
+        eng.toggle(4.0)
+
+    def test_overdub_stamps_mod_phase_with_rate(self):
+        eng = Engine()
+        self._fresh(eng)
+        eng.set_rate(2.0)
+        eng.override_ch = 1
+        self.assertEqual(eng.toggle(10.0), [])
+        eng.record("n 1 67 90", 1, 67, 10.75)  # (10.75-0)*2 = 21.5 % 4 = 1.5
+        eng.record("x 1 67", 1, 67, 11.25)      # 22.5 % 4 = 2.5
+        self.assertEqual(eng.toggle(12.0), ["noff 1"])
+        self.assertEqual(eng.loop.length, 4.0)
+        self.assertEqual(
+            [(e.phase, e.cmd) for e in eng.loop.tracks[1].events],
+            [(1.5, "n 1 67 90"), (2.5, "x 1 67")],
+        )
+
+    def test_single_channel_take_other_channels_pass(self):
+        eng = Engine()
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 1.0)   # locks ch 0
+        eng.record("n 3 40 100", 3, 40, 1.5)   # other channel: not recorded
+        eng.record("v 3 64", 3, None, 2.0)
+        eng.toggle(4.0)
+        self.assertEqual(set(eng.loop.tracks), {0})
+        self.assertEqual(
+            [(e.phase, e.cmd) for e in eng.loop.tracks[0].events],
+            [(0.0, "x 0 60"), (1.0, "n 0 60 100")],
+        )
+
+    def test_g_and_panic_not_recorded(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("g 0 12", 0, None, 0.5)
+        eng.record("panic 0", 0, None, 0.6)
+        eng.record("v 0 64", 0, None, 0.7)
+        eng.toggle(4.0)
+        self.assertEqual([e.cmd for e in eng.loop.tracks[0].events], ["v 0 64"])
+
+
 if __name__ == "__main__":
     unittest.main()
