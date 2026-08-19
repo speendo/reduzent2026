@@ -235,6 +235,29 @@ class Engine:
         if self._recording:
             self._discard_take()
 
+    def delete_track(self, ch):
+        if self._recording:
+            return []  # the runtime routes 'd' to cancel() instead
+        if ch not in self.loop.tracks:
+            return []
+        del self.loop.tracks[ch]
+        self._seam_pending.clear()
+        if not self.loop.tracks:
+            self.loop.length = 0.0  # deleting all tracks resets the loop
+            self.loop.anchor = None
+            self._reset_playback()
+        return [f"noff {ch}"]
+
+    def toggle_mute(self, ch):
+        if self._recording:
+            return []
+        if ch not in self.loop.tracks:
+            return []
+        track = self.loop.tracks[ch]
+        track.muted = not track.muted
+        self._seam_pending.clear()
+        return [f"noff {ch}"]
+
     # --- take lifecycle -------------------------------------------------
 
     def _start_take(self, now):

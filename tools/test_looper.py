@@ -469,6 +469,44 @@ class TestEngineReRecord(unittest.TestCase):
         )
 
 
+class TestEngineEdit(unittest.TestCase):
+    def _loop(self, eng):
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.5)
+        eng.record("x 0 60", 0, 60, 0.6)
+        eng.toggle(4.0)
+        eng.override_ch = 1
+        eng.toggle(6.0)
+        eng.record("n 1 72 90", 1, 72, 6.5)
+        eng.record("x 1 72", 1, 72, 6.7)
+        eng.toggle(8.0)
+
+    def test_delete_track_returns_noff_and_resets_when_empty(self):
+        eng = Engine()
+        self._loop(eng)
+        self.assertEqual(eng.delete_track(0), ["noff 0"])
+        self.assertNotIn(0, eng.loop.tracks)
+        self.assertEqual(eng.loop.length, 4.0)  # one track remains: loop survives
+        self.assertEqual(eng.delete_track(1), ["noff 1"])
+        self.assertEqual(eng.loop.tracks, {})
+        self.assertEqual(eng.loop.length, 0.0)  # reset
+        self.assertIsNone(eng.loop.anchor)
+
+    def test_delete_missing_channel_noop(self):
+        eng = Engine()
+        self.assertEqual(eng.delete_track(3), [])
+
+    def test_toggle_mute_returns_noff_and_flips(self):
+        eng = Engine()
+        self._loop(eng)
+        self.assertEqual(eng.toggle_mute(0), ["noff 0"])
+        self.assertTrue(eng.loop.tracks[0].muted)
+        self.assertEqual(eng.toggle_mute(0), ["noff 0"])
+        self.assertFalse(eng.loop.tracks[0].muted)
+        self.assertEqual(eng.toggle_mute(9), [])
+
+
 class TestEngineOverRecord(unittest.TestCase):
     def _two_track_loop(self, eng):
         eng.override_ch = 0
