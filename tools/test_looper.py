@@ -350,5 +350,124 @@ class TestEngineOverdub(unittest.TestCase):
         self.assertEqual([e.cmd for e in eng.loop.tracks[0].events], ["v 0 64"])
 
 
+class TestEngineReRecord(unittest.TestCase):
+    def _loop(self, eng):
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.5)
+        eng.record("x 0 60", 0, 60, 0.6)
+        eng.toggle(4.0)
+
+    def test_rerecord_mutes_old_track_and_noff(self):
+        eng = Engine()
+        self._loop(eng)
+        eng.override_ch = 0
+        self.assertEqual(eng.toggle(10.0), ["noff 0"])
+        self.assertTrue(eng.loop.tracks[0].muted)
+        eng.record("n 0 65 100", 0, 65, 10.5)
+        eng.record("x 0 65", 0, 65, 11.0)
+        self.assertEqual(eng.toggle(14.0), ["noff 0"])
+        self.assertEqual(eng.loop.length, 4.0)  # lone-track re-record: fresh length
+        self.assertEqual(
+            [(e.phase, e.cmd) for e in eng.loop.tracks[0].events],
+            [(0.5, "n 0 65 100"), (1.0, "x 0 65")],
+        )
+        self.assertFalse(eng.loop.tracks[0].muted)  # prior mute state inherited
+
+    def test_cancel_restores_prior_mute(self):
+        eng = Engine()
+        self._loop(eng)
+        eng.loop.tracks[0].muted = True  # prior mute state (toggle_mute lands in Task 5)
+        eng.override_ch = 0
+        self.assertEqual(eng.toggle(10.0), ["noff 0"])
+        self.assertTrue(eng.loop.tracks[0].muted)
+        eng.record("n 0 65 100", 0, 65, 10.5)
+        eng.cancel()
+        self.assertFalse(eng.recording)
+        self.assertTrue(eng.loop.tracks[0].muted)  # prior mute restored
+        self.assertEqual(eng.loop.length, 4.0)
+        self.assertEqual(
+            [(e.phase, e.cmd) for e in eng.loop.tracks[0].events],
+            [(0.5, "n 0 60 100"), (0.6, "x 0 60")],
+        )
+
+    def test_cancel_restores_unmuted(self):
+        eng = Engine()
+        self._loop(eng)
+        self.assertFalse(eng.loop.tracks[0].muted)
+        eng.override_ch = 0
+        eng.toggle(10.0)
+        self.assertTrue(eng.loop.tracks[0].muted)  # muted for the take
+        eng.record("n 0 65 100", 0, 65, 10.5)
+        eng.cancel()
+        self.assertFalse(eng.loop.tracks[0].muted)  # prior state restored
+        self.assertEqual(eng.loop.length, 4.0)
+
+    def test_rerecord_committed_track_inherits_prior_mute(self):
+        eng = Engine()
+        self._loop(eng)
+        eng.loop.tracks[0].muted = True  # prior mute state
+        eng.override_ch = 0
+        self.assertEqual(eng.toggle(10.0), ["noff 0"])
+        eng.record("n 0 65 100", 0, 65, 10.5)
+        eng.record("x 0 65", 0, 65, 11.0)
+        self.assertEqual(eng.toggle(14.0), ["noff 0"])
+        self.assertTrue(eng.loop.tracks[0].muted)  # prior mute state inherited on commit
+
+    def test_speculative_lone_track_rerecord(self):
+        eng = Engine()
+        self._loop(eng)
+        eng.override_ch = None  # no override: speculative survivor re-record
+        self.assertEqual(eng.toggle(10.0), ["noff 0"])
+        self.assertTrue(eng.loop.tracks[0].muted)
+        eng.record("n 0 65 100", 0, 65, 10.5)
+        eng.record("x 0 65", 0, 65, 11.0)
+        self.assertEqual(eng.toggle(14.0), ["noff 0"])
+        self.assertEqual(eng.loop.length, 4.0)
+        self.assertEqual(
+            [(e.phase, e.cmd) for e in eng.loop.tracks[0].events],
+            [(0.5, "n 0 65 100"), (1.0, "x 0 65")],
+        )
+
+    def test_speculative_take_on_other_channel_is_overdub(self):
+        eng = Engine()
+        self._loop(eng)
+        eng.override_ch = None  # no override: lone track muted speculatively
+        eng.toggle(10.0)
+        eng.record("n 3 40 100", 3, 40, 12.5)  # locks ch 3 (12.5 % 4 = 0.5)
+        self.assertFalse(eng.loop.tracks[0].muted)  # speculative mute undone
+        eng.record("x 3 40", 3, 40, 13.0)           # 13.0 % 4 = 1.0
+        eng.toggle(14.0)
+        self.assertEqual(set(eng.loop.tracks), {0, 3})
+        self.assertEqual(eng.loop.length, 4.0)  # overdub: existing length kept
+        self.assertEqual(
+            [(e.phase, e.cmd) for e in eng.loop.tracks[3].events],
+            [(0.5, "n 3 40 100"), (1.0, "x 3 40")],
+        )
+        self.assertFalse(eng.loop.tracks[0].muted)
+
+    def test_seam_wrap_off_before_on(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.5)
+        eng.record("x 0 60", 0, 60, 0.6)
+        eng.toggle(4.0)
+        eng.override_ch = 1
+        eng.toggle(6.0)
+        eng.record("n 1 72 90", 1, 72, 6.5)
+        eng.record("x 1 72", 1, 72, 6.7)
+        eng.toggle(8.0)
+        eng.override_ch = 0
+        self.assertEqual(eng.toggle(10.0), ["noff 0"])  # 2 tracks: overdub
+        eng.record("n 0 60 100", 0, 60, 13.8)  # 13.8 % 4 = 1.8
+        eng.record("x 0 60", 0, 60, 16.1)       # 16.1 % 4 = 0.1  (off < on: seam)
+        eng.toggle(16.5)
+        self.assertEqual(
+            [(round(e.phase, 6), e.cmd) for e in eng.loop.tracks[0].events],
+            [(0.1, "x 0 60"), (1.8, "n 0 60 100")],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

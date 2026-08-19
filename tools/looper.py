@@ -203,7 +203,19 @@ class Engine:
         if head not in CAPTURED:
             return  # g / panic / noff / resetcc / settings are control, not content
         if self._take_ch is None:
-            self._take_ch = ch  # lock the take to the first note's channel
+            self._take_ch = ch
+            if self._take_fresh is None:
+                self._take_fresh = not (
+                    len(self.loop.tracks) == 1 and ch not in self.loop.tracks
+                )
+            if self._speculative and self._take_ch != self._speculative_ch:
+                # First note on a different channel: this is an overdub, not a
+                # re-record, so undo the speculative mute of the survivor.
+                track = self.loop.tracks.get(self._speculative_ch)
+                if track is not None:
+                    track.muted = self._old_muted
+                self._old_track = None
+                self._speculative = False
         if ch != self._take_ch:
             return  # single-channel take: other channels pass through live
         if head == "n" and note is not None:
@@ -227,21 +239,32 @@ class Engine:
 
     def _start_take(self, now):
         ch = self.override_ch
+        live = []
+        if ch is not None and ch in self.loop.tracks:
+            self._mute_for_take(ch)
+            live.append(f"noff {ch}")
+        elif ch is None and len(self.loop.tracks) == 1:
+            lone = next(iter(self.loop.tracks))
+            self._mute_for_take(lone)  # speculative: the survivor is being re-recorded
+            live.append(f"noff {lone}")
+            self._speculative = True
+            self._speculative_ch = lone
         if not self.loop.tracks:
             fresh = True
         elif len(self.loop.tracks) == 1 and ch is not None and ch in self.loop.tracks:
             fresh = True  # lone-track overwrite: fresh length
         elif ch is None and len(self.loop.tracks) == 1:
-            fresh = True  # the survivor is being replaced -> fresh length
+            fresh = None  # resolve at the first note
         else:
             fresh = False  # loop exists: overdub against the current length
         self._recording = True
-        self._take_ch = ch
+        self._take_ch = None if ch is None else ch
         self._take_anchor = now
         self._take_fresh = fresh
         self._take_events = []
         self._take_held = set()
-        return []
+        self._seam_pending.clear()
+        return live
 
     def _stop_take(self, now):
         if self._take_ch is None or not self._take_events:
@@ -261,18 +284,28 @@ class Engine:
             )
             self._seq += 1
         events = [e for (t, e) in self._take_events]
-        self.loop.tracks[self._take_ch] = Track(
-            events=sorted(events, key=lambda e: (e.phase, e.seq))
-        )
         if self._take_fresh:
             self.loop.length = length
             self.loop.anchor = self._take_anchor
+        track = Track(events=sorted(events, key=lambda e: (e.phase, e.seq)))
+        track.muted = self._old_muted if self._old_track is not None else False
+        self.loop.tracks[self._take_ch] = track
         self._reset_playback()
         ch = self._take_ch
         self._clear_take()
         return [f"noff {ch}"]
 
+    def _mute_for_take(self, ch):
+        track = self.loop.tracks[ch]
+        self._old_track = track
+        self._old_track_ch = ch
+        self._old_muted = track.muted
+        track.muted = True
+        self._seam_pending.clear()
+
     def _discard_take(self):
+        if self._old_track is not None:
+            self.loop.tracks[self._old_track_ch].muted = self._old_muted
         self._clear_take()
 
     def _clear_take(self):
