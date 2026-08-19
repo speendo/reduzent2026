@@ -501,3 +501,63 @@ def save_loop_named(base: str, name: str, loop: Loop) -> None:
 def load_loop_named(base: str, name: str) -> Loop:
     """Read `<base>/<name>/loop.loop`; raises ValueError on malformed content."""
     return load_loop(loop_path(base, name))
+
+
+_PROGRAM_NAMES = {0: "1-bit", 1: "arp", 2: "mono"}
+
+
+class _noop_ctx:
+    """Null context manager for when no lock is provided."""
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        pass
+
+
+def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
+                 override_inst, last_program):
+    """Return the two status-bar lines (the looper's two-line status bar)."""
+    name_disp = loop_name if loop_name is not None else "no loop"
+    length_disp = f"{loop.length:.2f}s" if loop.length > 0 else "0.00s"
+    if override_ch is not None:
+        ch_display = str(override_ch)
+        ch_mode = "(override)"
+    elif last_channel is not None:
+        ch_display = str(last_channel)
+        ch_mode = "(MIDI)"
+    else:
+        ch_display = "--"
+        ch_mode = "(MIDI)"
+    if override_inst is not None:
+        inst_display = str(override_inst)
+    elif last_program is not None:
+        inst_display = _PROGRAM_NAMES.get(last_program, str(last_program))
+    else:
+        inst_display = "--"
+    line1 = (
+        f" \033[1;36m\u25b8\033[0m \033[1;32m{port}\033[0m @ \033[1;32m{baud}\033[0m"
+        f"  loop: \033[1;33m{name_disp}\033[0m  len: \033[1;32m{length_disp}\033[0m"
+        f"  trk: {len(loop.tracks)}  rate: x{rate:.2f}"
+    )
+    line2 = (
+        f" \033[1;36m\u25b8\033[0m ch: \033[1;32m{ch_display}\033[0m {ch_mode}  "
+        f"inst: \033[1;32m{inst_display}\033[0m   "
+        f"\033[2mspace rec  d del  x mute  p panic  o noff  w save  r load  "
+        f"+/- rate  0 reset  c ch  i inst  m menu  s settings  q quit\033[0m"
+    )
+    return line1, line2
+
+
+def draw_status(port, baud, loop_name, engine, override_ch, last_channel,
+                override_inst, last_program, lock=None):
+    """Redraw the two-line status bar at the terminal bottom."""
+    rows = os.get_terminal_size().lines
+    line1, line2 = status_lines(port, baud, loop_name, engine.loop, engine.rate,
+                                override_ch, last_channel, override_inst, last_program)
+    ctx = lock if lock else _noop_ctx()
+    with ctx:
+        sys.stdout.write("\033[s")  # save cursor
+        sys.stdout.write(f"\033[{rows - 1};1H\033[2K{line1}")
+        sys.stdout.write(f"\033[{rows};1H\033[2K{line2}")
+        sys.stdout.write("\033[u")  # restore cursor
+        sys.stdout.flush()

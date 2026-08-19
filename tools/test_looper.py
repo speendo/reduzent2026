@@ -9,6 +9,7 @@ Run:
 """
 
 import os
+import re
 import tempfile
 import unittest
 
@@ -26,6 +27,7 @@ from looper import (
     list_loop_names,
     save_loop_named,
     load_loop_named,
+    status_lines,
 )
 
 
@@ -796,6 +798,49 @@ class TestRuntimeHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(FileNotFoundError):
                 load_loop_named(d, "missing")
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class TestStatusLines(unittest.TestCase):
+    @staticmethod
+    def _plain(text):
+        return _ANSI_RE.sub("", text)
+
+    def test_no_loop_defaults(self):
+        line1, line2 = status_lines("/dev/ttyUSB0", 115200, None, Loop(), 1.0,
+                                    None, None, None, None)
+        line1, line2 = self._plain(line1), self._plain(line2)
+        self.assertIn("/dev/ttyUSB0", line1)
+        self.assertIn("loop: no loop", line1)
+        self.assertIn("trk: 0", line1)
+        self.assertIn("rate: x1.00", line1)
+        self.assertIn("ch: --", line2)
+
+    def test_loop_overrides_and_rate(self):
+        loop = Loop(length=4.0)
+        loop.tracks[0] = Track()
+        loop.tracks[3] = Track()
+        line1, line2 = status_lines("p", 9600, "jam1", loop, 2.0,
+                                    5, 2, None, 0)
+        line1, line2 = self._plain(line1), self._plain(line2)
+        self.assertIn("jam1", line1)
+        self.assertIn("4.00s", line1)
+        self.assertIn("trk: 2", line1)
+        self.assertIn("rate: x2.00", line1)
+        self.assertIn("ch: 5", line2)
+        self.assertIn("(override)", line2)
+        self.assertIn("inst: 1-bit", line2)
+
+    def test_override_inst_and_midi_channel(self):
+        loop = Loop()
+        line1, line2 = status_lines("p", 9600, None, loop, 1.0,
+                                    None, 3, 7, None)
+        line1, line2 = self._plain(line1), self._plain(line2)
+        self.assertIn("ch: 3", line2)
+        self.assertIn("(MIDI)", line2)
+        self.assertIn("inst: 7", line2)
 
 
 if __name__ == "__main__":
