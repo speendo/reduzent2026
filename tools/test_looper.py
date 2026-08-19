@@ -171,5 +171,48 @@ class TestMalformed(unittest.TestCase):
             loop_from_text("reduzent-loop v1\nlength 4.0\n0.000000 n abc 60 100\n")
 
 
+class TestRoundTrip(unittest.TestCase):
+    def test_full_round_trip_equality(self):
+        loop = Loop(length=4.0)
+        loop.tracks[0] = Track(
+            events=[
+                Event(phase=0.0, seq=0, cmd="n 0 60 100"),
+                Event(phase=0.0, seq=1, cmd="v 0 64"),
+                Event(phase=0.5, seq=2, cmd="x 0 60"),
+            ]
+        )
+        loop.tracks[3] = Track(
+            events=[Event(phase=1.25, seq=3, cmd="n 3 67 90")], muted=True
+        )
+        restored = loop_from_text(loop_to_text(loop))
+        self.assertEqual(restored, loop)
+
+    def test_seq_reassigned_in_file_order(self):
+        loop = Loop(length=4.0)
+        loop.tracks[0] = Track(events=[Event(phase=1.0, seq=7, cmd="n 0 64 90")])
+        loop.tracks[3] = Track(events=[Event(phase=0.5, seq=3, cmd="x 3 60")])
+        restored = loop_from_text(loop_to_text(loop))
+        self.assertEqual(
+            [(e.seq, e.phase, e.cmd) for e in restored.tracks[0].events],
+            [(1, 1.0, "n 0 64 90")],
+        )
+        self.assertEqual(
+            [(e.seq, e.phase, e.cmd) for e in restored.tracks[3].events],
+            [(0, 0.5, "x 3 60")],
+        )
+
+    def test_empty_state_round_trip(self):
+        restored = loop_from_text(loop_to_text(Loop()))
+        self.assertEqual(restored.length, 0.0)
+        self.assertEqual(restored.tracks, {})
+        self.assertIsNone(restored.anchor)
+
+    def test_phases_lossless_to_microsecond(self):
+        loop = Loop(length=2.0)
+        loop.tracks[0] = Track(events=[Event(phase=0.123456, seq=0, cmd="n 0 60 100")])
+        restored = loop_from_text(loop_to_text(loop))
+        self.assertEqual(restored.tracks[0].events[0].phase, 0.123456)
+
+
 if __name__ == "__main__":
     unittest.main()
