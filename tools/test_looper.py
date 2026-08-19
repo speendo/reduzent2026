@@ -609,5 +609,100 @@ class TestEngineOverRecord(unittest.TestCase):
         )
 
 
+class TestEngineDue(unittest.TestCase):
+    def _loop(self, eng):
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.0)
+        eng.record("x 0 60", 0, 60, 0.5)
+        eng.record("n 0 64 100", 0, 64, 1.0)
+        eng.record("x 0 64", 0, 64, 1.5)
+        eng.toggle(4.0)
+
+    def _two_track(self, eng):
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.5)
+        eng.record("x 0 60", 0, 60, 0.6)
+        eng.toggle(4.0)
+        eng.override_ch = 1
+        eng.toggle(6.0)
+        eng.record("n 1 72 90", 1, 72, 6.5)
+        eng.record("x 1 72", 1, 72, 6.7)
+        eng.toggle(8.0)
+
+    def test_due_empty_loop(self):
+        eng = Engine()
+        self.assertEqual(eng.due(0.0), [])
+
+    def test_due_emits_in_phase_seq_order(self):
+        eng = Engine()
+        self._loop(eng)
+        self.assertEqual([e.cmd for e in eng.due(0.0)], ["n 0 60 100"])
+        self.assertEqual([e.cmd for e in eng.due(0.6)], ["x 0 60"])
+        self.assertEqual([e.cmd for e in eng.due(1.2)], ["n 0 64 100"])
+        self.assertEqual([e.cmd for e in eng.due(1.7)], ["x 0 64"])
+        self.assertEqual(eng.due(2.0), [])
+        self.assertEqual([e.cmd for e in eng.due(4.1)], ["n 0 60 100"])  # wrap: phase 0
+        self.assertEqual([e.cmd for e in eng.due(4.6)], ["x 0 60"])
+
+    def test_same_phase_burst_ordered_by_seq(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        # Distinct notes at the same phase, so the off==on seam clamp does not
+        # defer any of these offs; notes 60/61 are released at phase 2.0 so the
+        # stop does not synthesize same-channel closing offs at phase 0.
+        eng.record("n 0 60 100", 0, 60, 1.0)
+        eng.record("n 0 61 100", 0, 61, 1.0)
+        eng.record("x 0 62", 0, 62, 1.0)
+        eng.record("x 0 63", 0, 63, 1.0)
+        eng.record("x 0 60", 0, 60, 2.0)
+        eng.record("x 0 61", 0, 61, 2.0)
+        eng.toggle(4.0)
+        self.assertEqual(
+            [e.cmd for e in eng.due(1.2)],
+            ["n 0 60 100", "n 0 61 100", "x 0 62", "x 0 63"],
+        )
+
+    def test_seam_clamp_full_length_note(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.5)
+        eng.record("x 0 60", 0, 60, 0.5)  # off == on: ambiguous -> full-length note
+        eng.toggle(4.0)
+        self.assertEqual([e.cmd for e in eng.due(0.5)], ["n 0 60 100"])  # off deferred
+        self.assertEqual(eng.due(1.0), [])
+        self.assertEqual(eng.due(2.0), [])
+        self.assertEqual(eng.due(4.1), [])
+        self.assertEqual([e.cmd for e in eng.due(4.6)],
+                         ["n 0 60 100", "x 0 60"])  # off fires one cycle later
+
+    def test_muted_track_skipped_in_due(self):
+        eng = Engine()
+        self._two_track(eng)
+        eng.toggle_mute(1)
+        self.assertEqual([e.cmd for e in eng.due(7.0)],
+                         ["n 0 60 100", "x 0 60"])
+
+    def test_resume_continues_due_emission(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 1.0)
+        eng.record("x 0 60", 0, 60, 2.0)
+        eng.record("n 0 60 100", 0, 60, 3.0)
+        eng.record("x 0 60", 0, 60, 3.5)
+        eng.toggle(4.0)
+        self.assertEqual([e.cmd for e in eng.due(0.5)], [])
+        self.assertEqual([e.cmd for e in eng.due(1.5)], ["n 0 60 100"])
+        self.assertEqual([e.cmd for e in eng.due(2.5)], ["x 0 60"])
+        self.assertEqual(eng.halt(), ["panic"])
+        eng.resume(100.0)
+        self.assertEqual([e.cmd for e in eng.due(100.5)], ["n 0 60 100"])  # phase 3.0
+        self.assertEqual([e.cmd for e in eng.due(101.0)], ["x 0 60"])      # phase 3.5
+
+
 if __name__ == "__main__":
     unittest.main()

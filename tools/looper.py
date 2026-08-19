@@ -214,6 +214,45 @@ class Engine:
         self._last_phase = self._halt_phase
         self._halted = False
 
+    def due(self, now):
+        self._last_now = now
+        if self._halted or self.loop.length <= 0 or not self.loop.tracks:
+            return []
+        cur = self.phase(now)
+        if cur is None:
+            return []
+        if cur < self._last_phase:  # the loop wrapped to a new cycle
+            self._cycle += 1
+            window = (-1.0, cur)  # inclusive of phase 0 so phase-0 events fire
+        else:
+            window = (self._last_phase, cur)
+        candidates = []
+        for track in self.loop.tracks.values():
+            if track.muted:
+                continue
+            for e in track.events:
+                if window[0] < e.phase <= window[1]:
+                    candidates.append(e)
+        candidates.sort(key=lambda e: (e.phase, e.seq))
+        ons_at_phase = {}
+        result = []
+        for e in candidates:
+            k = _note_key(e.cmd)
+            if e.cmd.startswith("x") and k is not None:
+                if k in self._seam_pending and self._seam_pending[k][0] < self._cycle:
+                    result.append(self._seam_pending[k][1])  # deferred full-length off
+                    del self._seam_pending[k]
+                elif ons_at_phase.get(k) == e.phase:
+                    self._seam_pending[k] = (self._cycle, e)  # clamp: off == on
+                else:
+                    result.append(e)
+            else:
+                if k is not None:
+                    ons_at_phase[k] = e.phase
+                result.append(e)
+        self._last_phase = cur
+        return result
+
     def toggle(self, now):
         self._last_now = now
         if self._halted:
