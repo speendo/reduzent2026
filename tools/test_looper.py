@@ -704,5 +704,67 @@ class TestEngineDue(unittest.TestCase):
         self.assertEqual([e.cmd for e in eng.due(101.0)], ["x 0 60"])      # phase 3.5
 
 
+class TestEngineRoundTrip(unittest.TestCase):
+    def test_recorded_events_play_back(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.0)
+        eng.record("x 0 60", 0, 60, 0.5)
+        eng.record("n 0 64 100", 0, 64, 1.0)
+        eng.record("x 0 64", 0, 64, 1.5)
+        eng.toggle(4.0)
+        played = []
+        for t in (0.0, 0.6, 1.2, 1.7, 2.5, 4.1, 4.6, 5.2, 5.7):
+            played += [e.cmd for e in eng.due(t)]
+        self.assertEqual(
+            played,
+            [
+                "n 0 60 100", "x 0 60", "n 0 64 100", "x 0 64",
+                "n 0 60 100", "x 0 60", "n 0 64 100", "x 0 64",
+            ],
+        )
+
+    def test_engine_builds_loop_that_round_trips(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 0.0)
+        eng.record("x 0 60", 0, 60, 0.5)
+        eng.record("n 0 64 100", 0, 64, 1.0)
+        eng.record("x 0 64", 0, 64, 1.5)
+        eng.toggle(4.0)
+        eng.override_ch = 1
+        eng.toggle(6.0)
+        eng.record("n 1 72 90", 1, 72, 6.5)  # 6.5 % 4 = 2.5
+        eng.record("x 1 72", 1, 72, 6.7)       # 6.7 % 4 = 2.7
+        eng.toggle(8.0)
+        eng.toggle_mute(0)
+        restored = loop_from_text(loop_to_text(eng.loop))
+        self.assertEqual(restored.length, 4.0)
+        self.assertIsNone(restored.anchor)
+        self.assertTrue(restored.tracks[0].muted)
+        self.assertEqual(
+            [(e.phase, e.cmd) for e in restored.tracks[0].events],
+            [(0.0, "n 0 60 100"), (0.5, "x 0 60"), (1.0, "n 0 64 100"), (1.5, "x 0 64")],
+        )
+        self.assertEqual(
+            [(e.phase, e.cmd) for e in restored.tracks[1].events],
+            [(2.5, "n 1 72 90"), (2.7, "x 1 72")],
+        )
+
+    def test_engine_continues_seq_from_loaded_loop(self):
+        text = "reduzent-loop v1\nlength 4.000000\n0.500000 n 0 60 100\n0.600000 x 0 60\n"
+        eng = Engine(loop_from_text(text))
+        eng.loop.anchor = 6.0  # the runtime sets the anchor to the load moment
+        eng.override_ch = 1
+        eng.toggle(6.0)
+        eng.record("n 1 72 90", 1, 72, 6.5)
+        eng.record("x 1 72", 1, 72, 6.7)
+        eng.toggle(8.0)
+        self.assertEqual(eng.loop.length, 4.0)
+        self.assertEqual([e.seq for e in eng.loop.tracks[1].events], [2, 3])
+
+
 if __name__ == "__main__":
     unittest.main()
