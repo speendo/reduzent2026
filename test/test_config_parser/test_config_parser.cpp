@@ -104,6 +104,34 @@ void test_non_cfg_line(void) {
     TEST_ASSERT_EQUAL(CFG_NONE, config_handle_line("cfgsetfoo 1\n", &cfg, out, sizeof(out)));
 }
 
+void test_validate_espnow_channel(void) {
+    TEST_ASSERT_EQUAL(0, config_validate_field("espnow_channel", "1"));
+    TEST_ASSERT_EQUAL(0, config_validate_field("espnow_channel", "13"));
+    TEST_ASSERT_EQUAL(-1, config_validate_field("espnow_channel", "0"));
+    TEST_ASSERT_EQUAL(-1, config_validate_field("espnow_channel", "15"));
+}
+
+void test_validate_node_id(void) {
+    TEST_ASSERT_EQUAL(0, config_validate_field("node_id", "0"));
+    TEST_ASSERT_EQUAL(0, config_validate_field("node_id", "254"));
+    TEST_ASSERT_EQUAL(-1, config_validate_field("node_id", "255"));
+}
+
+void test_validate_solenoid_hold_ms(void) {
+    TEST_ASSERT_EQUAL(0, config_validate_field("solenoid_hold_ms", "10"));
+    TEST_ASSERT_EQUAL(0, config_validate_field("solenoid_hold_ms", "500"));
+    TEST_ASSERT_EQUAL(-1, config_validate_field("solenoid_hold_ms", "9"));
+    TEST_ASSERT_EQUAL(-1, config_validate_field("solenoid_hold_ms", "501"));
+}
+
+void test_validate_unknown_key(void) {
+    TEST_ASSERT_EQUAL(-1, config_validate_field("nonexistent", "42"));
+}
+
+void test_validate_not_a_number(void) {
+    TEST_ASSERT_EQUAL(-1, config_validate_field("espnow_channel", "abc"));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_cfgget);
@@ -116,5 +144,10 @@ int main(void) {
     RUN_TEST(test_cfgsave);
     RUN_TEST(test_cfgreset);
     RUN_TEST(test_non_cfg_line);
+    RUN_TEST(test_validate_espnow_channel);
+    RUN_TEST(test_validate_node_id);
+    RUN_TEST(test_validate_solenoid_hold_ms);
+    RUN_TEST(test_validate_unknown_key);
+    RUN_TEST(test_validate_not_a_number);
     return UNITY_END();
 }
