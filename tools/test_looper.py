@@ -507,6 +507,57 @@ class TestEngineEdit(unittest.TestCase):
         self.assertEqual(eng.toggle_mute(9), [])
 
 
+class TestEngineRateHalt(unittest.TestCase):
+    def _loop(self, eng):
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 1.0)
+        eng.record("x 0 60", 0, 60, 2.0)
+        eng.record("n 0 60 100", 0, 60, 3.0)
+        eng.record("x 0 60", 0, 60, 3.5)
+        eng.toggle(4.0)
+
+    def test_set_rate_clamps(self):
+        eng = Engine()
+        eng.set_rate(10.0)
+        self.assertEqual(eng.rate, 4.0)
+        eng.set_rate(0.1)
+        self.assertEqual(eng.rate, 0.25)
+        eng.set_rate(2.0)
+        self.assertEqual(eng.rate, 2.0)
+
+    def test_halt_freezes_phase_and_resume_continues(self):
+        eng = Engine()
+        self._loop(eng)
+        eng.phase(1.5)
+        self.assertEqual(eng.halt(), ["panic"])
+        self.assertAlmostEqual(eng.phase(100.0), 1.5)
+        self.assertEqual(eng.toggle(100.0), [])
+        eng.resume(100.0)
+        self.assertAlmostEqual(eng.phase(100.0), 1.5)
+        self.assertAlmostEqual(eng.phase(101.0), 2.5)
+
+    def test_halt_during_take_only_panics(self):
+        eng = Engine()
+        self._loop(eng)
+        eng.override_ch = 0
+        eng.toggle(10.0)
+        self.assertEqual(eng.halt(), ["panic"])
+        self.assertAlmostEqual(eng.phase(11.0), 3.0)
+        eng.record("n 0 65 100", 0, 65, 10.5)
+        self.assertEqual(eng.toggle(14.0), ["noff 0"])
+        self.assertAlmostEqual(eng.phase(14.1), 0.1)
+
+    def test_halt_without_loop_just_panics(self):
+        eng = Engine()
+        self.assertEqual(eng.halt(), ["panic"])
+        self.assertIsNone(eng.phase(1.0))
+
+    def test_resume_when_not_halted_is_noop(self):
+        eng = Engine()
+        eng.resume(1.0)
+
+
 class TestEngineOverRecord(unittest.TestCase):
     def _two_track_loop(self, eng):
         eng.override_ch = 0

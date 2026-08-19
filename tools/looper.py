@@ -187,6 +187,33 @@ class Engine:
     def set_rate(self, rate):
         self.rate = min(4.0, max(0.25, rate))
 
+    def halt(self):
+        live = ["panic"]
+        if self._recording:
+            return live
+        if (
+            not self._halted
+            and self.loop.length > 0
+            and self.loop.anchor is not None
+            and self._last_now is not None
+        ):
+            hp = self.phase(self._last_now)
+            if hp is not None:
+                self._halt_phase = hp
+                self._halted = True
+        return live
+
+    def resume(self, now):
+        if not self._halted:
+            return
+        self._last_now = now
+        if self._halt_phase is None:
+            self._halted = False
+            return
+        self.loop.anchor = now - self._halt_phase / self.rate
+        self._last_phase = self._halt_phase
+        self._halted = False
+
     def toggle(self, now):
         self._last_now = now
         if self._halted:
