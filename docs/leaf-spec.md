@@ -115,8 +115,9 @@ leaf firmware
 
 - Live = default: ESP-NOW receive + actuator, plus a heartbeat broadcast every
   10 s; radio kept awake (no WiFi stack / web UI).
-- Settings = WiFi + parasol web UI, entered briefly after boot or on
-  `ENTER_SETTINGS`. Detailed in the config spec.
+- Settings = WiFi + parasol web UI, entered on `ENTER_SETTINGS`; the leaf's
+  `settings_window_sec` is the timeout back to live. (Only the controller
+  enters settings at boot via its boot window.) Detailed in the config spec.
 
 ## Configuration (parasol)
 

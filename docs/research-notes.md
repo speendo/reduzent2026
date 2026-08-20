@@ -137,6 +137,31 @@ coarse "tap vs full" (2–3 steps), not a smooth velocity curve.
 - Watch: if MIDI arrives over the same serial line, commands must be
   distinguishable from MIDI bytes (controller spec).
 
+## 6a. ESP-NOW channel vs. WiFi mode switches (gotcha)
+
+**Decision: every settings→live transition must re-apply the ESP-NOW channel.**
+
+- ESP-NOW requires `peer.channel` to equal the WiFi radio's *current* channel
+  (`esp_now.h`): "If the value is 0, use the current channel ... Otherwise, it
+  must be set as the channel that station or softap is on." Otherwise
+  `esp_now_send()` fails with `E (…) ESPNOW: Peer channel is not equal to the
+  home channel, send fail!` (`ESP_ERR_ESPNOW_CHANNEL` = `0x3066`, rc 12390).
+- Switching `WiFi.mode(WIFI_OFF)` → `WiFi.mode(WIFI_STA)` restarts the WiFi
+  driver, which **resets the radio to the default channel (1)**. The country
+  code (`wifi_set_country`) and `esp_wifi_set_ps(WIFI_PS_NONE)` persist across
+  start/stop; the channel does not.
+- Boot sets the channel correctly (`esp_wifi_set_channel(cfg.espnow_channel)`
+  before `esp_now_init` + `esp_now_add_peer`). The settings-mode exit path
+  missed this, so after every boot window (default `settings_window_sec = 30`)
+  the controller keepalive / leaf heartbeat repeatedly hit the channel error.
+- Fix: `wifi_ap_stop()` centralizes the restore — it re-applies
+  `esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE)` after
+  `WiFi.mode(WIFI_STA)` and checks the return value. Keep the AP channel ==
+  ESP-NOW channel (`cfg.espnow_channel`) so no channel switching is ever needed
+  between modes.
+- Any future code that calls `WiFi.mode(...)` (especially OFF → STA) and then
+  uses ESP-NOW must re-apply `esp_wifi_set_channel()` afterwards.
+
 ## 7. Open decisions (resolve in respective specs)
 
 - MIDI transport: DIN→UART @31250 vs USB-MIDI vs computer-over-serial

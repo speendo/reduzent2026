@@ -1,9 +1,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <esp_now.h>
-#include <esp_wifi.h>
-#include <esp_system.h>
-#include <esp32-hal-timer.h>
+extern "C" {
+#include "mdns.h"
+}
 
 #include "espnow_frame.h"
 #include "note_freq.h"
@@ -13,29 +12,26 @@
 #include "expression.h"
 #include "mixer.h"
 #include "solenoid.h"
+#include "mode.h"
+#include "ssid.h"
+#include "wifi_ap.h"
+#include <ESPAsyncWebServer.h>
+#include "parasol_setup.h"
+#include "config.h"
 
-#define MY_CHANNEL 0       // TODO: parasol config (later slice)
-#define PIEZO_PIN 3
 #define PWM_CHANNEL 0
 #define PWM_RES 8
 #define LEDC_XTAL_CLK_HZ 40000000  // C3 crystal; matches core's LEDC_USE_XTAL_CLK
-#define ESP_NOW_CHANNEL 13  // fixed WiFi channel; MUST stay 13 to match controller_main.cpp
 #define HEARTBEAT_MS 10000
 #define HEARTBEAT_JITTER_MS 1000
 
 #define ARP_TICK_MS 16     // ~60 Hz: arpeggio index + frequency retune
-#define PITCH_BEND_RANGE 2 // +/- semitones (leaf-spec default)
 #define STUCK_NOTE_TIMEOUT_MS 3000
 // Solenoid leaf (percussive; see docs/leaf-spec.md §Solenoid driver).
 // GPIO 4 is a plain GPIO on the ESP32-C3 (piezo uses GPIO 3).
-#define SOLENOID_PIN 4
 #define SOLENOID_LEDC_CHANNEL 2  // (chan/2)%4 => channel 2 = timer 1, separate from piezo timer 0
 #define SOLENOID_LEDC_TIMER 1
 #define SOLENOID_FREQ 20000       // ~20 kHz carrier: duty controls coil current
-#define SOLENOID_NOTE 36          // note that triggers this solenoid (parasol later)
-#define SOLENOID_HOLD_MS 40       // strike window; exceeds pull-in time
-#define SOLENOID_DUTY_MIN 40      // velocity 1 (0-255)
-#define SOLENOID_DUTY_MAX 220     // velocity 127 (0-255)
 #define NUM_NOTES 128         // MIDI note count; poly_pressure table size
 
 // Render paths: B = 1-bit 32 kHz mixer, A = LEDC arpeggio, M = LEDC monophonic.
@@ -45,6 +41,14 @@ static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 static voice_table_t voices;
 static solenoid_t solenoid;
+static leaf_config_t cfg;          // loaded from NVS in setup(); defaults if none
+static mode_state_t dev_mode;          // settings/live state machine
+static char ap_ssid[32];               // settings-mode AP SSID
+static device_mode_t last_hw_mode = MODE_LIVE;  // WiFi/ESP-NOW state matching dev_mode.mode
+static AsyncWebServer server(80);
+static bool parasol_initialized = false;
+static volatile bool leave_settings_request = false;
+static envelope_params_t env;      // ADSR params built from cfg at boot
 
 static render_path_t render_path = RENDER_1BIT;
 static uint16_t pitch_bend = PITCH_BEND_CENTER;
@@ -75,7 +79,7 @@ static void set_duty(uint16_t level, uint8_t chan_p, uint8_t poly_p) {
 // the duty resolution that can represent it. Without this, notes below ~51
 // (147 Hz) overflow the LEDC divider and keep the previous note's frequency.
 static void retune_ledc(uint32_t now_ms, uint8_t note) {
-    int16_t cents = pitch_bend_cents(pitch_bend, PITCH_BEND_RANGE)
+    int16_t cents = pitch_bend_cents(pitch_bend, cfg.piezo_pitch_bend_range)
                   + vibrato_cents(now_ms, cc1_vibrato);
     uint16_t freq = cents_to_freq(note_to_freq(note), cents);
     uint8_t res = ledc_resolution_for(LEDC_XTAL_CLK_HZ, freq);
@@ -128,7 +132,7 @@ static void render_mono_ctrl(uint32_t now_ms) {
 // Path B: 32 kHz ISR — XOR all active voices into the piezo GPIO. No float
 // math here: phase increments were precomputed by mixer_update_incs.
 static void IRAM_ATTR on_mixer_sample(void) {
-    digitalWrite(PIEZO_PIN, mix_voices(&voices, phase_inc));
+    digitalWrite(cfg.gpio_piezo, mix_voices(&voices, phase_inc));
 }
 
 // Path B: recompute per-voice phase increments (note + pitch bend + vibrato).
@@ -136,7 +140,7 @@ static void mixer_update_incs(uint32_t now_ms) {
     for (int i = 0; i < MAX_VOICES; i++) {
         voice_t* v = &voices.voices[i];
         if (!voice_is_active(v)) { phase_inc[i] = 0; continue; }
-        int16_t cents = pitch_bend_cents(pitch_bend, PITCH_BEND_RANGE)
+        int16_t cents = pitch_bend_cents(pitch_bend, cfg.piezo_pitch_bend_range)
                       + vibrato_cents(now_ms, cc1_vibrato);
         uint16_t freq = cents_to_freq(note_to_freq(v->note), cents);
         phase_inc[i] = phase_increment(freq, MIXER_SAMPLE_RATE);
@@ -151,9 +155,9 @@ static void render_1bit_ctrl(uint32_t now_ms) {
 
 // Detach LEDC and start the 32 kHz GPIO mixer (path B).
 static void enter_1bit(void) {
-    ledcDetachPin(PIEZO_PIN);
-    pinMode(PIEZO_PIN, OUTPUT);
-    digitalWrite(PIEZO_PIN, 0);
+    ledcDetachPin(cfg.gpio_piezo);
+    pinMode(cfg.gpio_piezo, OUTPUT);
+    digitalWrite(cfg.gpio_piezo, 0);
     mix_timer = timerBegin(0, 2, true);        // 80 MHz APB / 2 = 40 MHz tick (C3)
     timerAttachInterrupt(mix_timer, &on_mixer_sample, false);
     timerAlarmWrite(mix_timer, 1250, true);    // 40e6 / 1250 = 32 kHz
@@ -167,7 +171,7 @@ static void enter_ledc(void) {
         timerDetachInterrupt(mix_timer);
         mix_timer = NULL;
     }
-    ledcAttachPin(PIEZO_PIN, PWM_CHANNEL);
+    ledcAttachPin(cfg.gpio_piezo, PWM_CHANNEL);
     ledcWrite(PWM_CHANNEL, 0);
     arp_index = -1;
     mono_note = 0xFF;
@@ -192,18 +196,42 @@ static void send_heartbeat() {
     frame.value = (uint8_t)(secs > 255 ? 255 : secs);
     frame.value_hi = 0;
     frame_pack(&frame, buf);
+#ifdef LEAF_DEBUG
+    esp_err_t rc = esp_now_send(BROADCAST_MAC, buf, sizeof(buf));
+    Serial.printf("[dbg] hb send rc=%d played=%u last=%us\n",
+                  (int)rc, frame.note, frame.value);
+#else
     esp_now_send(BROADCAST_MAC, buf, sizeof(buf));
+#endif
     played_since_hb = false;
 }
 
-static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
+// No-op send callback: heartbeat sends are fire-and-forget. ESP-IDF drains its
+// tx queue via its internal send callback regardless; registering here keeps
+// the leaf uniform with the controller and surfaces no stale-state risks.
+static void on_send(const uint8_t* mac, esp_now_send_status_t status) {
     (void)mac;
+    (void)status;
+}
+
+static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
     if (len != ESP_NOW_FRAME_SIZE) return;
     espnow_frame_t frame;
     frame_unpack(data, &frame);
-    if (frame.channel != MY_CHANNEL && frame.channel != ESP_NOW_CHANNEL_BROADCAST) return;
+#ifdef LEAF_DEBUG
+    if (frame.channel != cfg.channel && frame.channel != ESP_NOW_CHANNEL_BROADCAST) {
+        dbg_enqueue(mac, &frame, DBG_ACT_FILTERED, 0);
+        return;
+    }
+#else
+    if (frame.channel != cfg.channel && frame.channel != ESP_NOW_CHANNEL_BROADCAST) return;
+#endif
 
     uint32_t now = millis();
+#ifdef LEAF_DEBUG
+    dbg_action_t act = DBG_ACT_OTHER;
+    uint16_t aux = 0;
+#endif
     switch (frame.type) {
         case EVENT_NOTE:
             frame.note &= 0x7F; // clamp untrusted radio value to 0-127
@@ -248,81 +276,181 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
             for (int i = 0; i < NUM_NOTES; i++) poly_pressure[i] = 127;
             break;
         case EVENT_PANIC:
-            voice_table_init(&voices, &ENVELOPE_DEFAULT);
+            voice_table_init(&voices, &env);
             arp_index = -1;
             mono_note = 0xFF;
             ledcWrite(PWM_CHANNEL, 0);
+            break;
+        case EVENT_ENTER_SETTINGS:
+            // All leaves (0xFF) or a leaf whose node_id matches the target.
+            if (frame.note == ESP_NOW_CHANNEL_BROADCAST || frame.note == cfg.node_id) {
+                mode_enter_settings(&dev_mode, millis());
+            }
             break;
         default:
             break;
     }
 }
 
+// WiFi AP client tracking — feeds mode_set_clients for timeout pausing.
+static void on_wifi_event(void* arg, esp_event_base_t base, int32_t id, void* data) {
+    if (base == WIFI_EVENT && (id == WIFI_EVENT_AP_STACONNECTED || id == WIFI_EVENT_AP_STADISCONNECTED)) {
+        mode_set_clients(&dev_mode, WiFi.softAPgetStationNum(), millis());
+    }
+}
+
+// parasol save callback: check the _leave_settings switch, then save config.
+static esp_err_t leaf_save_with_leave(void) {
+    const char *v = prsl_get("system._leave_settings");
+    if (config_leave_settings_requested(v)) leave_settings_request = true;
+    return parasol_save_leaf_to_nvs();
+}
+
+// Live -> Settings: silence audio and bring up the settings AP.
+static void enter_settings_mode(void) {
+    enter_ledc();                       // stop 1-bit mixer if active; silence piezo LEDC
+    ledcWrite(SOLENOID_LEDC_CHANNEL, 0);
+    wifi_ap_start(ap_ssid, cfg.espnow_channel);
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED, on_wifi_event, NULL);
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, on_wifi_event, NULL);
+    if (!parasol_initialized) {
+        parasol_register_leaf_fields();
+        prsl_init(&server, leaf_save_with_leave, parasol_load_leaf_from_nvs, NULL);
+        parasol_initialized = true;
+    }
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->redirect("/settings");
+    });
+    mdns_init();
+    mdns_hostname_set("instrument");
+    parasol_load_leaf_from_nvs();  // reload saved values into form
+    prsl_start();
+}
+
+// Settings -> Live: tear down the AP, restore ESP-NOW and the render path.
+static void exit_settings_mode(void) {
+#ifdef LEAF_DEBUG
+    Serial.println("[dbg] mode: live");
+#endif
+    server.end();           // stop the web server
+    wifi_ap_stop(cfg.espnow_channel);   // was: WiFi.mode(WIFI_OFF); wifi_ap_stop();
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("esp_now_init failed");
+    }
+    esp_now_register_send_cb(on_send);
+    esp_now_register_recv_cb(on_recv);
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, BROADCAST_MAC, 6);
+    peer.channel = cfg.espnow_channel;
+    peer.ifidx = WIFI_IF_STA;
+    if (esp_now_add_peer(&peer) != ESP_OK) {
+        Serial.println("esp_now_add_peer failed");
+    }
+    if (render_path == RENDER_1BIT) enter_1bit();
+}
+
 void setup() {
     Serial.begin(115200);
+    config_defaults(&cfg);
+    config_load("leaf_cfg", &cfg);
+    env.attack_ms = cfg.piezo_adsr_attack_ms;
+    env.decay_ms = cfg.piezo_adsr_decay_ms;
+    env.sustain_pct = cfg.piezo_adsr_sustain_pct;
+    env.release_ms = cfg.piezo_adsr_release_ms;
     for (int i = 0; i < NUM_NOTES; i++) poly_pressure[i] = 127;
 
-    voice_table_init(&voices, &ENVELOPE_DEFAULT);
+    voice_table_init(&voices, &env);
 
     ledcSetup(PWM_CHANNEL, 1000, PWM_RES);
-    ledcAttachPin(PIEZO_PIN, PWM_CHANNEL);
+    ledcAttachPin(cfg.gpio_piezo, PWM_CHANNEL);
     ledcWrite(PWM_CHANNEL, 0);
 
     ledcSetup(SOLENOID_LEDC_CHANNEL, SOLENOID_FREQ, PWM_RES);
-    ledcAttachPin(SOLENOID_PIN, SOLENOID_LEDC_CHANNEL);
+    ledcAttachPin(cfg.gpio_solenoid, SOLENOID_LEDC_CHANNEL);
     ledcWrite(SOLENOID_LEDC_CHANNEL, 0);
-    solenoid_init(&solenoid, SOLENOID_NOTE, SOLENOID_DUTY_MIN, SOLENOID_DUTY_MAX, SOLENOID_HOLD_MS);
+    solenoid_init(&solenoid, cfg.solenoid_note, cfg.solenoid_duty_min, cfg.solenoid_duty_max, cfg.solenoid_hold_ms);
 
     WiFi.mode(WIFI_STA);
+    wifi_set_country("EU");
     esp_wifi_set_ps(WIFI_PS_NONE);  // never modem-sleep; don't miss broadcasts
-    esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_channel(cfg.espnow_channel, WIFI_SECOND_CHAN_NONE);
     if (esp_now_init() != ESP_OK) {
         Serial.println("esp_now_init failed");
         return;
     }
+    esp_now_register_send_cb(on_send);
     esp_now_register_recv_cb(on_recv);
 
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, BROADCAST_MAC, 6);
-    peer.channel = ESP_NOW_CHANNEL;
+    peer.channel = cfg.espnow_channel;
     peer.ifidx = WIFI_IF_STA;
     if (esp_now_add_peer(&peer) != ESP_OK) {
         Serial.println("add_peer failed");
     }
 
+    mode_init(&dev_mode, (uint32_t)cfg.settings_window_sec * 1000);
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    ssid_build(ap_ssid, sizeof(ap_ssid), 0, cfg.node_id, mac);
+    if (mode_boot(&dev_mode, millis())) enter_settings_mode();
+    last_hw_mode = dev_mode.mode;
+
     Serial.println("leaf ready");
 }
 
 void loop() {
+    // Serial command: "settings" enters settings mode (debug / testing).
+    if (Serial.available()) {
+        String line = Serial.readStringUntil('\n');
+        line.trim();
+        if (line == "settings" && !mode_is_settings(&dev_mode)) {
+            Serial.println("entering settings");
+            mode_enter_settings(&dev_mode, millis());
+        }
+    }
+
     uint32_t now = millis();
-
-    // Percussive: release the coil once the strike window closes.
-    if (solenoid_tick(&solenoid, now) == 0) {
-        ledcWrite(SOLENOID_LEDC_CHANNEL, 0);
+    if (leave_settings_request && mode_is_settings(&dev_mode)) {
+        mode_request_exit(&dev_mode);
+        leave_settings_request = false;
+    }
+    mode_tick(&dev_mode, now);
+    if (dev_mode.mode != last_hw_mode) {
+        if (mode_is_settings(&dev_mode)) enter_settings_mode();
+        else exit_settings_mode();
+        last_hw_mode = dev_mode.mode;
     }
 
-    voice_watchdog(&voices, now, STUCK_NOTE_TIMEOUT_MS);
-
-    if (render_path == RENDER_ARPEGGIO) {
-        render_arpeggio_ctrl(now); // ADSR + duty every ~1 ms
-        if ((int32_t)(now - last_arp_ms) >= ARP_TICK_MS) {
-            last_arp_ms = now;
-            render_arpeggio_advance(now); // arpeggio + frequency every ~16 ms
+    if (!mode_is_settings(&dev_mode)) {
+        // Percussive: release the coil once the strike window closes.
+        if (solenoid_tick(&solenoid, now) == 0) {
+            ledcWrite(SOLENOID_LEDC_CHANNEL, 0);
         }
-    } else if (render_path == RENDER_MONO) {
-        render_mono_ctrl(now); // ADSR + duty + retune-on-change every ~1 ms
-        if ((int32_t)(now - last_arp_ms) >= ARP_TICK_MS && mono_note != 0xFF) {
-            last_arp_ms = now;
-            retune_ledc(now, mono_note); // pitch bend + vibrato at ~60 Hz
-        }
-    } else {
-        render_1bit_ctrl(now); // ADSR + phase increments at ~1 kHz; ISR mixes at 32 kHz
-    }
 
-    static uint32_t next_hb = 0; // first heartbeat fires immediately at boot
-    if ((int32_t)(now - next_hb) >= 0) {
-        send_heartbeat();
-        next_hb = now + HEARTBEAT_MS + (esp_random() % HEARTBEAT_JITTER_MS);
+        voice_watchdog(&voices, now, STUCK_NOTE_TIMEOUT_MS);
+
+        if (render_path == RENDER_ARPEGGIO) {
+            render_arpeggio_ctrl(now); // ADSR + duty every ~1 ms
+            if ((int32_t)(now - last_arp_ms) >= ARP_TICK_MS) {
+                last_arp_ms = now;
+                render_arpeggio_advance(now); // arpeggio + frequency every ~16 ms
+            }
+        } else if (render_path == RENDER_MONO) {
+            render_mono_ctrl(now); // ADSR + duty + retune-on-change every ~1 ms
+            if ((int32_t)(now - last_arp_ms) >= ARP_TICK_MS && mono_note != 0xFF) {
+                last_arp_ms = now;
+                retune_ledc(now, mono_note); // pitch bend + vibrato at ~60 Hz
+            }
+        } else {
+            render_1bit_ctrl(now); // ADSR + phase increments at ~1 kHz; ISR mixes at 32 kHz
+        }
+
+        static uint32_t next_hb = 0; // first heartbeat fires immediately at boot
+        if ((int32_t)(now - next_hb) >= 0) {
+            send_heartbeat();
+            next_hb = now + HEARTBEAT_MS + (esp_random() % HEARTBEAT_JITTER_MS);
+        }
     }
     delay(1); // yield so the CPU idles instead of spinning
 }

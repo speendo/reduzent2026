@@ -18,7 +18,9 @@ MVP vertical slice: MIDI in → controller → ESP-NOW → leaf plays.
 
 Backlog: multiple controllers, parasol image upload, acks/retry + dynamic
 pairing, battery sleep, multi-channel actuators, solenoid on/off-hold,
-switch Arduino → ESP-IDF (only if parasol/footprint forces it).
+MIDI-driven ADSR (MIDI 2.0 Property Exchange or MIDI 1.0 NRPN → new ESP-NOW
+event → leaf envelope params), switch Arduino → ESP-IDF (only if
+parasol/footprint forces it).
 
 ## Research
 

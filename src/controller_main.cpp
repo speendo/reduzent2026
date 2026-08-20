@@ -1,5 +1,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
+extern "C" {
+#include "mdns.h"
+}
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_event.h>
@@ -10,8 +13,14 @@
 #include "espnow_frame.h"
 #include "text_parser.h"
 #include "held_notes.h"
+#include "mode.h"
+#include "ssid.h"
+#include "wifi_ap.h"
+#include <ESPAsyncWebServer.h>
+#include "parasol_setup.h"
+#include "config.h"
+#include "config_parser.h"
 
-#define ESP_NOW_CHANNEL 13  // fixed WiFi channel; must match every leaf
 #define KEEPALIVE_INTERVAL_MS 750  // X / Y (3000 / 4)
 #define LINE_BUF_LEN 64
 #define LINE_QUEUE_LEN 4
@@ -24,6 +33,13 @@ static SemaphoreHandle_t evt_sem = NULL;
 static char line_buf[LINE_BUF_LEN];
 static size_t line_len = 0;
 static held_notes_t held;
+static controller_config_t cfg;   // loaded from NVS in setup(); defaults if none
+static mode_state_t dev_mode;          // settings/live state machine
+static char ap_ssid[32];               // settings-mode AP SSID
+static device_mode_t last_hw_mode = MODE_LIVE;  // WiFi/ESP-NOW state matching dev_mode.mode
+static AsyncWebServer server(80);
+static bool parasol_initialized = false;
+static volatile bool leave_settings_request = false;
 
 // on_recv (WiFi task) may not do blocking serial I/O: buffer the frame, flag loop().
 static volatile bool rx_pending = false;
@@ -31,8 +47,9 @@ static uint8_t rx_mac[6];
 static int rx_len;
 static espnow_frame_t rx_frame;
 
-// No-op send callback: keeps ESP-NOW draining its send queue so esp_now_send
-// does not stall once the buffer fills. Failed frames stay dropped (fire-and-forget).
+// No-op send callback: uniform with the leaf and harmless. ESP-IDF drains its
+// tx queue via its internal send callback regardless; failed frames stay
+// dropped (fire-and-forget).
 static void on_send(const uint8_t* mac, esp_now_send_status_t status) {
     (void)mac;
     (void)status;
@@ -59,6 +76,16 @@ static void transmit_redundant(const espnow_frame_t* f, int copies) {
 }
 
 static void handle_line(const char* line) {
+    char out[128];
+    cfg_action_t action = config_handle_line(line, &cfg, out, sizeof(out));
+    if (action != CFG_NONE) {
+        if (action == CFG_SAVE && config_save("ctrl_cfg", &cfg) != 0) {
+            snprintf(out, sizeof(out), "error: save failed\n");
+        }
+        Serial.print(out);
+        return;
+    }
+
     espnow_frame_t frame;
     if (!parse_command(line, &frame)) return;
 
@@ -73,6 +100,10 @@ static void handle_line(const char* line) {
             if (frame.channel == ESP_NOW_CHANNEL_BROADCAST) held_clear_all(&held);
             else held_clear_channel(&held, frame.channel);
             transmit_redundant(&frame, 3);
+            break;
+        case EVENT_ENTER_SETTINGS:
+            transmit(&frame);           // broadcast/target leaves (was the default case)
+            mode_enter_settings(&dev_mode, millis());
             break;
         default:
             transmit(&frame);
@@ -120,14 +151,68 @@ static void on_serial_event(void* arg, esp_event_base_t base, int32_t event_id, 
 static void on_serial_rx(void) { drain_serial(); }
 #endif
 
+// WiFi AP client tracking — feeds mode_set_clients for timeout pausing.
+static void on_wifi_event(void* arg, esp_event_base_t base, int32_t id, void* data) {
+    if (base == WIFI_EVENT && (id == WIFI_EVENT_AP_STACONNECTED || id == WIFI_EVENT_AP_STADISCONNECTED)) {
+        mode_set_clients(&dev_mode, WiFi.softAPgetStationNum(), millis());
+    }
+}
+
+// parasol save callback: check the _leave_settings switch, then save config.
+static esp_err_t ctrl_save_with_leave(void) {
+    const char *v = prsl_get("system._leave_settings");
+    if (config_leave_settings_requested(v)) leave_settings_request = true;
+    return parasol_save_controller_to_nvs();
+}
+
+// Live -> Settings: bring up the controller's own settings AP.
+static void enter_settings_mode(void) {
+    wifi_ap_start(ap_ssid, cfg.espnow_channel);
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED, on_wifi_event, NULL);
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, on_wifi_event, NULL);
+    if (!parasol_initialized) {
+        parasol_register_controller_fields();
+        prsl_init(&server, ctrl_save_with_leave, parasol_load_controller_from_nvs, NULL);
+        parasol_initialized = true;
+    }
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->redirect("/settings");
+    });
+    mdns_init();
+    mdns_hostname_set("instrument");
+    parasol_load_controller_from_nvs();
+    prsl_start();
+}
+
+// Settings -> Live: tear down the AP and restore ESP-NOW for live operation.
+static void exit_settings_mode(void) {
+    server.end();
+    wifi_ap_stop(cfg.espnow_channel);   // was: WiFi.mode(WIFI_OFF); wifi_ap_stop();
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("esp_now_init failed");
+    }
+    esp_now_register_send_cb(on_send);
+    esp_now_register_recv_cb(on_recv);
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, BROADCAST_MAC, 6);
+    peer.channel = cfg.espnow_channel;
+    peer.ifidx = WIFI_IF_STA;
+    if (esp_now_add_peer(&peer) != ESP_OK) {
+        Serial.println("esp_now_add_peer failed");
+    }
+}
+
 void setup() {
     Serial.begin(115200);
+    config_defaults(&cfg);
+    config_load("ctrl_cfg", &cfg);
     line_q = xQueueCreate(LINE_QUEUE_LEN, LINE_BUF_LEN);
     evt_sem = xSemaphoreCreateBinary();
 
     WiFi.mode(WIFI_STA);
+    wifi_set_country("EU");
     esp_wifi_set_ps(WIFI_PS_NONE);  // never modem-sleep; keep broadcasts flowing
-    esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_channel(cfg.espnow_channel, WIFI_SECOND_CHAN_NONE);
     if (esp_now_init() != ESP_OK) {
         Serial.println("esp_now_init failed");
         return;
@@ -137,7 +222,7 @@ void setup() {
 
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, BROADCAST_MAC, 6);
-    peer.channel = ESP_NOW_CHANNEL;
+    peer.channel = cfg.espnow_channel;
     peer.ifidx = WIFI_IF_STA;
     if (esp_now_add_peer(&peer) != ESP_OK) {
         Serial.println("add_peer failed");
@@ -150,6 +235,12 @@ void setup() {
 #endif
 
     held_notes_init(&held);
+    mode_init(&dev_mode, (uint32_t)cfg.settings_window_sec * 1000);
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    ssid_build(ap_ssid, sizeof(ap_ssid), 1, 0, mac);
+    last_hw_mode = dev_mode.mode;
+
     Serial.println("controller ready");
 }
 
@@ -176,22 +267,35 @@ void loop() {
 
     static uint32_t next_keepalive = 0; // first keepalive fires at boot (no-op)
     uint32_t now = millis();
-    if ((int32_t)(now - next_keepalive) >= 0) {
-        send_keepalive();
-        next_keepalive = now + KEEPALIVE_INTERVAL_MS;
+    if (leave_settings_request && mode_is_settings(&dev_mode)) {
+        mode_request_exit(&dev_mode);
+        leave_settings_request = false;
+    }
+    mode_tick(&dev_mode, now);
+    if (dev_mode.mode != last_hw_mode) {
+        if (mode_is_settings(&dev_mode)) enter_settings_mode();
+        else exit_settings_mode();
+        last_hw_mode = dev_mode.mode;
     }
 
-    if (rx_pending) {
-        rx_pending = false;
-        if (rx_len == ESP_NOW_FRAME_SIZE && rx_frame.type == EVENT_HEARTBEAT) {
-            Serial.printf("hb %02x:%02x:%02x:%02x:%02x:%02x played=%u last=%us\n",
-                          rx_mac[0], rx_mac[1], rx_mac[2], rx_mac[3], rx_mac[4], rx_mac[5],
-                          (unsigned)rx_frame.note, (unsigned)rx_frame.value);
-        } else {
-            Serial.printf("rx len=%d type=%d mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
-                          rx_len,
-                          rx_len == ESP_NOW_FRAME_SIZE ? rx_frame.type : -1,
-                          rx_mac[0], rx_mac[1], rx_mac[2], rx_mac[3], rx_mac[4], rx_mac[5]);
+    if (!mode_is_settings(&dev_mode)) {
+        if ((int32_t)(now - next_keepalive) >= 0) {
+            send_keepalive();
+            next_keepalive = now + KEEPALIVE_INTERVAL_MS;
+        }
+
+        if (rx_pending) {
+            rx_pending = false;
+            if (rx_len == ESP_NOW_FRAME_SIZE && rx_frame.type == EVENT_HEARTBEAT) {
+                Serial.printf("hb %02x:%02x:%02x:%02x:%02x:%02x played=%u last=%us\n",
+                              rx_mac[0], rx_mac[1], rx_mac[2], rx_mac[3], rx_mac[4], rx_mac[5],
+                              (unsigned)rx_frame.note, (unsigned)rx_frame.value);
+            } else {
+                Serial.printf("rx len=%d type=%d mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+                              rx_len,
+                              rx_len == ESP_NOW_FRAME_SIZE ? rx_frame.type : -1,
+                              rx_mac[0], rx_mac[1], rx_mac[2], rx_mac[3], rx_mac[4], rx_mac[5]);
+            }
         }
     }
 
