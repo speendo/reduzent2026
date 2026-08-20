@@ -231,7 +231,6 @@ void setup() {
     uint8_t mac[6];
     WiFi.macAddress(mac);
     ssid_build(ap_ssid, sizeof(ap_ssid), 1, 0, mac);
-    if (mode_boot(&dev_mode, millis())) enter_settings_mode();
     last_hw_mode = dev_mode.mode;
 
     Serial.println("controller ready");

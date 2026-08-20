@@ -362,12 +362,23 @@ void setup() {
     uint8_t mac[6];
     WiFi.macAddress(mac);
     ssid_build(ap_ssid, sizeof(ap_ssid), 0, cfg.node_id, mac);
-    last_hw_mode = dev_mode.mode;   // leaf boots to live; never the boot window
+    if (mode_boot(&dev_mode, millis())) enter_settings_mode();
+    last_hw_mode = dev_mode.mode;
 
     Serial.println("leaf ready");
 }
 
 void loop() {
+    // Serial command: "settings" enters settings mode (debug / testing).
+    if (Serial.available()) {
+        String line = Serial.readStringUntil('\n');
+        line.trim();
+        if (line == "settings" && !mode_is_settings(&dev_mode)) {
+            Serial.println("entering settings");
+            mode_enter_settings(&dev_mode, millis());
+        }
+    }
+
     uint32_t now = millis();
     if (leave_settings_request && mode_is_settings(&dev_mode)) {
         mode_request_exit(&dev_mode);

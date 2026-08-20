@@ -89,14 +89,14 @@ and clicks Save, the save callback sets `exit_requested`, and the next
 `mode_tick()` exits to live. This gives the user an explicit "I'm done" action.
 
 **Boot behavior differs by role:**
-- **Controller:** after `mode_init()`, if `cfg.settings_window_sec > 0`, call
+- **Leaf:** after `mode_init()`, if `cfg.settings_window_sec > 0`, call
   `mode_enter_settings()` immediately (the boot window), then `mode_tick()`
-  auto-exits to live when it expires. `0` = boot straight to live.
-  Matches `docs/config-spec.md` ("Boot → Settings for a short window") and the
-  controller column of `settings_window_sec` in `docs/nvs-config-spec.md`.
-- **Leaf:** boots straight to `MODE_LIVE`; enters settings only on
-  `EVENT_ENTER_SETTINGS`. The leaf's `settings_window_sec` is the timeout back
-  to live after that trigger.
+  auto-exits to live when it expires. `0` = boot straight to live. This gives
+  the user a 30s window to connect to the AP and configure the leaf via parasol
+  without needing a controller present.
+- **Controller:** boots straight to `MODE_LIVE`. Enter settings via serial
+  `settings` command (broadcasts `EVENT_ENTER_SETTINGS` to leaves) or when the
+  controller itself receives the event.
 
 **Why header-only:** Consistent with existing lib/reduzent modules (envelope.h,
 voice.h, etc.). Small footprint, no linking issues.
@@ -139,6 +139,7 @@ not in wifi_ap.h, because each firmware registers different callbacks.
    - Call `config_defaults(&cfg)` + `config_load("leaf_cfg", &cfg)`
    - Replace hardcoded `#define`s with `cfg.*` fields
    - Call `mode_init(&dev_mode, cfg.settings_window_sec * 1000)`
+   - Call `mode_boot()` to enter settings at boot if window > 0 (leaf boot window)
    - Set WiFi country code: `wifi_set_country("EU")`
 4. In `on_recv()`:
    - Add `case EVENT_ENTER_SETTINGS:` that enters settings only when the frame
@@ -175,8 +176,7 @@ not in wifi_ap.h, because each firmware registers different callbacks.
    - Call `config_defaults(&cfg)` + `config_load("ctrl_cfg", &cfg)`
    - Replace hardcoded `#define ESP_NOW_CHANNEL` with `cfg.espnow_channel`
    - Call `mode_init(&dev_mode, cfg.settings_window_sec * 1000)`
-   - If `cfg.settings_window_sec > 0`, call `mode_enter_settings()` at boot
-     (boot window)
+   - Do NOT call `mode_boot()` — controller boots straight to live
    - Set WiFi country code: `wifi_set_country("EU")` (after `WiFi.mode()`)
 4. In `handle_line()`:
    - The `settings` command *already* transmits `EVENT_ENTER_SETTINGS` via the
@@ -267,7 +267,7 @@ move from the config spec's "Future settings" into the active structs —
 1. **Unit tests** (native build): Test mode state machine logic
    - Test mode_init sets MODE_LIVE
    - Test mode_init with window 0 stays LIVE at boot
-   - Test mode_init with window > 0 enters settings at boot (controller boot window)
+   - Test mode_init with window > 0 enters settings at boot (leaf boot window)
    - Test mode_enter_settings switches to MODE_SETTINGS
    - Test mode_tick timeout triggers exit
    - Test mode_is_settings returns correct state
@@ -277,17 +277,17 @@ move from the config spec's "Future settings" into the active structs —
    - Test mode_tick: grace period expires → exit
    - Test mode_request_exit: sets flag, next tick exits
 
-2. **Integration test** (hardware): Boot → enter settings → WiFi AP starts →
-   connect phone → verify parasol UI → phone disconnects → 7s grace → back to
-   live mode. Also: connect phone → timeout pauses → reconnect after disconnect
-   → grace cancelled → stays in settings.
+2. **Integration test** (hardware): Leaf boots → settings mode for 30s → WiFi
+   AP visible → connect phone → verify parasol UI → phone disconnects → 7s
+   grace → back to live mode. Controller boots to live; type `settings` in
+   serial monitor to enter settings mode.
 
 3. **Manual test**:
-   - Serial `settings` on controller triggers leaves' settings mode via ESP-NOW
-     (broadcast) and the controller's own settings mode
+   - Leaf: boot → AP appears → connect phone → parasol UI loads → toggle
+     `_leave_settings` + Save → exits to live
+   - Controller: type `settings` in serial monitor → enters settings mode,
+     broadcasts to leaves → type `settings` again to re-enter if needed
    - `settings <id>` targets a single leaf (requires node_id assigned)
-   - Toggle `_leave_settings` switch in parasol UI → Save → device exits
-     settings immediately
 
 ## Backlog
 
