@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <MDNS.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_event.h>
@@ -296,6 +297,10 @@ static void enter_settings_mode(void) {
         prsl_init(&server, leaf_save_with_leave, parasol_load_leaf_from_nvs, NULL);
         parasol_initialized = true;
     }
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->redirect("/settings");
+    });
+    MDNS.begin("instrument");
     parasol_load_leaf_from_nvs();  // reload saved values into form
     prsl_start();
 }

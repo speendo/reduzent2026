@@ -229,6 +229,18 @@ Key interplay with this plan: parasol groups/fields are registered and
 - Controller: `reduzent-controller`
 - No password for MVP (open AP for easy configuration)
 
+### DNS and Web Access
+
+- **mDNS:** After `wifi_ap_start()`, call `MDNS.begin("instrument")` on both
+  leaf and controller. This publishes `instrument.local` on the local subnet,
+  allowing users to type `instrument.local` instead of `192.168.4.1`.
+- **Root redirect:** `server.on("/", HTTP_GET, [](AsyncWebServerRequest *r){
+  r->redirect("/settings"); });` — redirecting `192.168.4.1` to the settings
+  page avoids the blank `/` response.
+
+These are added in `enter_settings_mode()` after the WiFi AP starts but
+before `prsl_start()`.
+
 ### Files
 
 | File | Action | Purpose |

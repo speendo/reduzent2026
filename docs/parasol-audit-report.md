@@ -121,6 +121,11 @@ valid C99 but invalid in C++ (Arduino compiles as C++). Users must
 declare `static const` variables instead. The library code itself does
 not use compound literals, so this is a documentation issue only.
 
+**8. Menu bar too wide on mobile (LOW).**
+The top-bar navigation groups span the full horizontal width,
+which causes text truncation / horizontal scroll on narrow phone
+screens. A responsive layout or collapsible menu would help.
+
 ### Documentation Issues
 
 **1. Stale version references.**
