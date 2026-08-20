@@ -29,7 +29,7 @@ and settings/live mode state machine are future slices.
 | Key | Type | Range | Default | Devices | Description |
 |-----|------|-------|---------|---------|-------------|
 | `channel` | uint8 | 0–15 | 0 | leaf (piezo + solenoid) | MIDI channel this leaf listens to. Frames on other channels are ignored. Currently hardcoded to 0 (`MY_CHANNEL`). |
-| `actuator` | uint8 | `piezo` / `solenoid` | `piezo` | leaf | Actuator type. Determines which render path and pin config are used. Currently selected at compile time. Stored as uint8 (0 = piezo, 1 = solenoid); serial and web interfaces use the names. |
+| `actuator` | uint8 | `piezo` / `solenoid` | `piezo` | leaf | Actuator type. Routes `EVENT_NOTE` in the receive path (`actuator_note_action` in `lib/reduzent/actuator.h`): piezo drives the voice table, solenoid strikes its assigned note. Stored as uint8 (0 = piezo, 1 = solenoid); serial and web interfaces use the names. |
 | `gpio_piezo` | uint8 | 0–28 | 3 | leaf | GPIO pin for the piezo output. Only used when `actuator = piezo`. |
 | `gpio_solenoid` | uint8 | 0–28 | 4 | leaf | GPIO pin for the solenoid output. Only used when `actuator = solenoid`. |
 | `solenoid_note` | uint16 | 0–127 | 36 | leaf (solenoid only) | MIDI note number that triggers this solenoid's strike. Only this note activates the solenoid; other notes are ignored. |

@@ -4,6 +4,7 @@ extern "C" {
 #include "mdns.h"
 }
 
+#include "actuator.h"
 #include "espnow_frame.h"
 #include "note_freq.h"
 #include "ledc_freq.h"
@@ -235,10 +236,24 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
     switch (frame.type) {
         case EVENT_NOTE:
             frame.note &= 0x7F; // clamp untrusted radio value to 0-127
-            if (solenoid_note_on(&solenoid, frame.note, frame.value, now)) {
-                ledcWrite(SOLENOID_LEDC_CHANNEL, solenoid.active_duty);
-                last_note_millis = now;
-                played_since_hb = true;
+            switch (actuator_note_action(cfg.actuator, frame.value)) {
+                case NOTE_ACTION_PIEZO_ON:
+                    voice_note_on(&voices, frame.note, frame.value, now);
+                    last_note_millis = now;
+                    played_since_hb = true;
+                    break;
+                case NOTE_ACTION_PIEZO_OFF:
+                    voice_note_off(&voices, frame.note, now);
+                    break;
+                case NOTE_ACTION_SOLENOID_STRIKE:
+                    if (solenoid_note_on(&solenoid, frame.note, frame.value, now)) {
+                        ledcWrite(SOLENOID_LEDC_CHANNEL, solenoid.active_duty);
+                        last_note_millis = now;
+                        played_since_hb = true;
+                    }
+                    break;
+                default:
+                    break;
             }
             break;
         case EVENT_PITCH_BEND:
