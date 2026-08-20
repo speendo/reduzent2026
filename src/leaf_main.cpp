@@ -16,6 +16,8 @@
 #include "mode.h"
 #include "ssid.h"
 #include "wifi_ap.h"
+#include <ESPAsyncWebServer.h>
+#include "parasol_setup.h"
 #include "config.h"
 
 #define PWM_CHANNEL 0
@@ -44,6 +46,8 @@ static leaf_config_t cfg;          // loaded from NVS in setup(); defaults if no
 static mode_state_t dev_mode;          // settings/live state machine
 static char ap_ssid[32];               // settings-mode AP SSID
 static device_mode_t last_hw_mode = MODE_LIVE;  // WiFi/ESP-NOW state matching dev_mode.mode
+static AsyncWebServer server(80);
+static bool parasol_initialized = false;
 static envelope_params_t env;      // ADSR params built from cfg at boot
 
 static render_path_t render_path = RENDER_1BIT;
@@ -269,10 +273,19 @@ static void enter_settings_mode(void) {
     enter_ledc();                       // stop 1-bit mixer if active; silence piezo LEDC
     ledcWrite(SOLENOID_LEDC_CHANNEL, 0);
     wifi_ap_start(ap_ssid, cfg.espnow_channel);
+    if (!parasol_initialized) {
+        parasol_register_leaf_fields();
+        prsl_init(&server, parasol_save_leaf_to_nvs, parasol_load_leaf_from_nvs, NULL);
+        parasol_initialized = true;
+    }
+    parasol_load_leaf_from_nvs();  // reload saved values into form
+    prsl_start();
 }
 
 // Settings -> Live: tear down the AP, restore ESP-NOW and the render path.
 static void exit_settings_mode(void) {
+    server.end();           // stop the web server
+    WiFi.mode(WIFI_OFF);   // release all WiFi + TCP resources
     wifi_ap_stop();
     if (esp_now_init() != ESP_OK) {
         Serial.println("esp_now_init failed");

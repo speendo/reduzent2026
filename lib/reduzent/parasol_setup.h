@@ -17,59 +17,59 @@ static const char *actuator_opts[][2] = {
 static inline void parasol_register_leaf_fields(void) {
     // Network
     prsl_add_group("network", "Network");
-    prsl_add_field(PRSL_NUMBER, "network", "espnow_channel", "ESP-NOW Channel",
-        &(prsl_field_opts_t){ .help = "WiFi channel 1-14", .attrs = "{'min':1,'max':14}" });
-    prsl_add_field(PRSL_NUMBER, "network", "settings_window_sec", "Settings Window (s)",
-        &(prsl_field_opts_t){ .help = "0-300 seconds; 0 = disabled", .attrs = "{'min':0,'max':300}" });
+    { static const prsl_field_opts_t o = { .help = "WiFi channel 1-14", .attrs = "{'min':1,'max':14}" };
+      prsl_add_field(PRSL_NUMBER, "network", "espnow_channel", "ESP-NOW Channel", &o); }
+    { static const prsl_field_opts_t o = { .help = "0-300 seconds; 0 = disabled", .attrs = "{'min':0,'max':300}" };
+      prsl_add_field(PRSL_NUMBER, "network", "settings_window_sec", "Settings Window (s)", &o); }
 
     // Leaf identity
     prsl_add_group("leaf", "Leaf");
-    prsl_add_field(PRSL_NUMBER, "leaf", "node_id", "Node ID",
-        &(prsl_field_opts_t){ .help = "0-254; 255 = unassigned", .attrs = "{'min':0,'max':254}" });
-    prsl_add_field(PRSL_NUMBER, "leaf", "channel", "MIDI Channel",
-        &(prsl_field_opts_t){ .help = "0-15", .attrs = "{'min':0,'max':15}" });
+    { static const prsl_field_opts_t o = { .help = "0-254; 255 = unassigned", .attrs = "{'min':0,'max':254}" };
+      prsl_add_field(PRSL_NUMBER, "leaf", "node_id", "Node ID", &o); }
+    { static const prsl_field_opts_t o = { .help = "0-15", .attrs = "{'min':0,'max':15}" };
+      prsl_add_field(PRSL_NUMBER, "leaf", "channel", "MIDI Channel", &o); }
     prsl_add_field_opts(PRSL_SELECT, "leaf", "actuator", "Actuator Type",
         actuator_opts, 2, NULL);
 
     // GPIO
     prsl_add_group("gpio", "Pin Configuration");
-    prsl_add_field(PRSL_NUMBER, "gpio", "gpio_piezo", "Piezo Pin",
-        &(prsl_field_opts_t){ .help = "GPIO 0-28", .attrs = "{'min':0,'max':28}" });
-    prsl_add_field(PRSL_NUMBER, "gpio", "gpio_solenoid", "Solenoid Pin",
-        &(prsl_field_opts_t){ .help = "GPIO 0-28", .attrs = "{'min':0,'max':28}" });
+    { static const prsl_field_opts_t o = { .help = "GPIO 0-28", .attrs = "{'min':0,'max':28}" };
+      prsl_add_field(PRSL_NUMBER, "gpio", "gpio_piezo", "Piezo Pin", &o); }
+    { static const prsl_field_opts_t o = { .help = "GPIO 0-28", .attrs = "{'min':0,'max':28}" };
+      prsl_add_field(PRSL_NUMBER, "gpio", "gpio_solenoid", "Solenoid Pin", &o); }
 
     // Solenoid
     prsl_add_group("solenoid", "Solenoid");
-    prsl_add_field(PRSL_NUMBER, "solenoid", "solenoid_note", "Note Number",
-        &(prsl_field_opts_t){ .help = "MIDI note 0-127", .attrs = "{'min':0,'max':127}" });
-    prsl_add_field(PRSL_NUMBER, "solenoid", "solenoid_hold_ms", "Hold Duration (ms)",
-        &(prsl_field_opts_t){ .help = "10-500 ms", .attrs = "{'min':10,'max':500}" });
-    prsl_add_field(PRSL_NUMBER, "solenoid", "solenoid_duty_min", "Min Duty",
-        &(prsl_field_opts_t){ .help = "PWM duty 0-255 at velocity 1", .attrs = "{'min':0,'max':255}" });
-    prsl_add_field(PRSL_NUMBER, "solenoid", "solenoid_duty_max", "Max Duty",
-        &(prsl_field_opts_t){ .help = "PWM duty 0-255 at velocity 127", .attrs = "{'min':0,'max':255}" });
+    { static const prsl_field_opts_t o = { .help = "MIDI note 0-127", .attrs = "{'min':0,'max':127}" };
+      prsl_add_field(PRSL_NUMBER, "solenoid", "solenoid_note", "Note Number", &o); }
+    { static const prsl_field_opts_t o = { .help = "10-500 ms", .attrs = "{'min':10,'max':500}" };
+      prsl_add_field(PRSL_NUMBER, "solenoid", "solenoid_hold_ms", "Hold Duration (ms)", &o); }
+    { static const prsl_field_opts_t o = { .help = "PWM duty 0-255 at velocity 1", .attrs = "{'min':0,'max':255}" };
+      prsl_add_field(PRSL_NUMBER, "solenoid", "solenoid_duty_min", "Min Duty", &o); }
+    { static const prsl_field_opts_t o = { .help = "PWM duty 0-255 at velocity 127", .attrs = "{'min':0,'max':255}" };
+      prsl_add_field(PRSL_NUMBER, "solenoid", "solenoid_duty_max", "Max Duty", &o); }
 
     // Piezo
     prsl_add_group("piezo", "Piezo");
-    prsl_add_field(PRSL_NUMBER, "piezo", "piezo_pitch_bend_range", "Pitch Bend Range",
-        &(prsl_field_opts_t){ .help = "Semitones +/-", .attrs = "{'min':1,'max':24}" });
-    prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_attack_ms", "Attack (ms)",
-        &(prsl_field_opts_t){ .attrs = "{'min':0,'max':5000}" });
-    prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_decay_ms", "Decay (ms)",
-        &(prsl_field_opts_t){ .attrs = "{'min':0,'max':5000}" });
-    prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_sustain_pct", "Sustain (%)",
-        &(prsl_field_opts_t){ .attrs = "{'min':0,'max':100}" });
-    prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_release_ms", "Release (ms)",
-        &(prsl_field_opts_t){ .attrs = "{'min':0,'max':5000}" });
+    { static const prsl_field_opts_t o = { .help = "Semitones +/-", .attrs = "{'min':1,'max':24}" };
+      prsl_add_field(PRSL_NUMBER, "piezo", "piezo_pitch_bend_range", "Pitch Bend Range", &o); }
+    { static const prsl_field_opts_t o = { .attrs = "{'min':0,'max':5000}" };
+      prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_attack_ms", "Attack (ms)", &o); }
+    { static const prsl_field_opts_t o = { .attrs = "{'min':0,'max':5000}" };
+      prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_decay_ms", "Decay (ms)", &o); }
+    { static const prsl_field_opts_t o = { .attrs = "{'min':0,'max':100}" };
+      prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_sustain_pct", "Sustain (%)", &o); }
+    { static const prsl_field_opts_t o = { .attrs = "{'min':0,'max':5000}" };
+      prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_release_ms", "Release (ms)", &o); }
 }
 
 // ── Controller field registration ────────────────────────────────
 static inline void parasol_register_controller_fields(void) {
     prsl_add_group("network", "Network");
-    prsl_add_field(PRSL_NUMBER, "network", "espnow_channel", "ESP-NOW Channel",
-        &(prsl_field_opts_t){ .help = "WiFi channel 1-14", .attrs = "{'min':1,'max':14}" });
-    prsl_add_field(PRSL_NUMBER, "network", "settings_window_sec", "Settings Window (s)",
-        &(prsl_field_opts_t){ .help = "0-300 seconds; 0 = skip at boot", .attrs = "{'min':0,'max':300}" });
+    { static const prsl_field_opts_t o = { .help = "WiFi channel 1-14", .attrs = "{'min':1,'max':14}" };
+      prsl_add_field(PRSL_NUMBER, "network", "espnow_channel", "ESP-NOW Channel", &o); }
+    { static const prsl_field_opts_t o = { .help = "0-300 seconds; 0 = skip at boot", .attrs = "{'min':0,'max':300}" };
+      prsl_add_field(PRSL_NUMBER, "network", "settings_window_sec", "Settings Window (s)", &o); }
 }
 
 // ── Validation helper ────────────────────────────────────────────
