@@ -13,6 +13,8 @@
 #include "mode.h"
 #include "ssid.h"
 #include "wifi_ap.h"
+#include <ESPAsyncWebServer.h>
+#include "parasol_setup.h"
 #include "config.h"
 #include "config_parser.h"
 
@@ -32,6 +34,8 @@ static controller_config_t cfg;   // loaded from NVS in setup(); defaults if non
 static mode_state_t dev_mode;          // settings/live state machine
 static char ap_ssid[32];               // settings-mode AP SSID
 static device_mode_t last_hw_mode = MODE_LIVE;  // WiFi/ESP-NOW state matching dev_mode.mode
+static AsyncWebServer server(80);
+static bool parasol_initialized = false;
 
 // on_recv (WiFi task) may not do blocking serial I/O: buffer the frame, flag loop().
 static volatile bool rx_pending = false;
@@ -145,10 +149,19 @@ static void on_serial_rx(void) { drain_serial(); }
 // Live -> Settings: bring up the controller's own settings AP.
 static void enter_settings_mode(void) {
     wifi_ap_start(ap_ssid, cfg.espnow_channel);
+    if (!parasol_initialized) {
+        parasol_register_controller_fields();
+        prsl_init(&server, parasol_save_controller_to_nvs, parasol_load_controller_from_nvs, NULL);
+        parasol_initialized = true;
+    }
+    parasol_load_controller_from_nvs();
+    prsl_start();
 }
 
 // Settings -> Live: tear down the AP and restore ESP-NOW for live operation.
 static void exit_settings_mode(void) {
+    server.end();
+    WiFi.mode(WIFI_OFF);
     wifi_ap_stop();
     if (esp_now_init() != ESP_OK) {
         Serial.println("esp_now_init failed");
