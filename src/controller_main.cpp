@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <MDNS.h>
+extern "C" {
+#include "mdns.h"
+}
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_event.h>
@@ -175,7 +177,8 @@ static void enter_settings_mode(void) {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         request->redirect("/settings");
     });
-    MDNS.begin("instrument");
+    mdns_init();
+    mdns_hostname_set("instrument");
     parasol_load_controller_from_nvs();
     prsl_start();
 }

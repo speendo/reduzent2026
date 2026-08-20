@@ -1,11 +1,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <MDNS.h>
-#include <esp_now.h>
-#include <esp_wifi.h>
-#include <esp_event.h>
-#include <esp_system.h>
-#include <esp32-hal-timer.h>
+extern "C" {
+#include "mdns.h"
+}
 
 #include "espnow_frame.h"
 #include "note_freq.h"
@@ -300,7 +297,8 @@ static void enter_settings_mode(void) {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         request->redirect("/settings");
     });
-    MDNS.begin("instrument");
+    mdns_init();
+    mdns_hostname_set("instrument");
     parasol_load_leaf_from_nvs();  // reload saved values into form
     prsl_start();
 }
