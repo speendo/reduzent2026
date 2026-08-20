@@ -196,18 +196,42 @@ static void send_heartbeat() {
     frame.value = (uint8_t)(secs > 255 ? 255 : secs);
     frame.value_hi = 0;
     frame_pack(&frame, buf);
+#ifdef LEAF_DEBUG
+    esp_err_t rc = esp_now_send(BROADCAST_MAC, buf, sizeof(buf));
+    Serial.printf("[dbg] hb send rc=%d played=%u last=%us\n",
+                  (int)rc, frame.note, frame.value);
+#else
     esp_now_send(BROADCAST_MAC, buf, sizeof(buf));
+#endif
     played_since_hb = false;
 }
 
-static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
+// No-op send callback: heartbeat sends are fire-and-forget. ESP-IDF drains its
+// tx queue via its internal send callback regardless; registering here keeps
+// the leaf uniform with the controller and surfaces no stale-state risks.
+static void on_send(const uint8_t* mac, esp_now_send_status_t status) {
     (void)mac;
+    (void)status;
+}
+
+static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
     if (len != ESP_NOW_FRAME_SIZE) return;
     espnow_frame_t frame;
     frame_unpack(data, &frame);
+#ifdef LEAF_DEBUG
+    if (frame.channel != cfg.channel && frame.channel != ESP_NOW_CHANNEL_BROADCAST) {
+        dbg_enqueue(mac, &frame, DBG_ACT_FILTERED, 0);
+        return;
+    }
+#else
     if (frame.channel != cfg.channel && frame.channel != ESP_NOW_CHANNEL_BROADCAST) return;
+#endif
 
     uint32_t now = millis();
+#ifdef LEAF_DEBUG
+    dbg_action_t act = DBG_ACT_OTHER;
+    uint16_t aux = 0;
+#endif
     switch (frame.type) {
         case EVENT_NOTE:
             frame.note &= 0x7F; // clamp untrusted radio value to 0-127
@@ -305,12 +329,15 @@ static void enter_settings_mode(void) {
 
 // Settings -> Live: tear down the AP, restore ESP-NOW and the render path.
 static void exit_settings_mode(void) {
+#ifdef LEAF_DEBUG
+    Serial.println("[dbg] mode: live");
+#endif
     server.end();           // stop the web server
-    WiFi.mode(WIFI_OFF);   // release all WiFi + TCP resources
-    wifi_ap_stop();
+    wifi_ap_stop(cfg.espnow_channel);   // was: WiFi.mode(WIFI_OFF); wifi_ap_stop();
     if (esp_now_init() != ESP_OK) {
         Serial.println("esp_now_init failed");
     }
+    esp_now_register_send_cb(on_send);
     esp_now_register_recv_cb(on_recv);
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, BROADCAST_MAC, 6);
@@ -351,6 +378,7 @@ void setup() {
         Serial.println("esp_now_init failed");
         return;
     }
+    esp_now_register_send_cb(on_send);
     esp_now_register_recv_cb(on_recv);
 
     esp_now_peer_info_t peer = {};

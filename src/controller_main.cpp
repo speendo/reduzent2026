@@ -47,8 +47,9 @@ static uint8_t rx_mac[6];
 static int rx_len;
 static espnow_frame_t rx_frame;
 
-// No-op send callback: keeps ESP-NOW draining its send queue so esp_now_send
-// does not stall once the buffer fills. Failed frames stay dropped (fire-and-forget).
+// No-op send callback: uniform with the leaf and harmless. ESP-IDF drains its
+// tx queue via its internal send callback regardless; failed frames stay
+// dropped (fire-and-forget).
 static void on_send(const uint8_t* mac, esp_now_send_status_t status) {
     (void)mac;
     (void)status;
@@ -186,8 +187,7 @@ static void enter_settings_mode(void) {
 // Settings -> Live: tear down the AP and restore ESP-NOW for live operation.
 static void exit_settings_mode(void) {
     server.end();
-    WiFi.mode(WIFI_OFF);
-    wifi_ap_stop();
+    wifi_ap_stop(cfg.espnow_channel);   // was: WiFi.mode(WIFI_OFF); wifi_ap_stop();
     if (esp_now_init() != ESP_OK) {
         Serial.println("esp_now_init failed");
     }
