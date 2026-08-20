@@ -113,7 +113,7 @@ voice.h, etc.). Small footprint, no linking issues.
 
 ```c
 void wifi_ap_start(const char* ssid, uint8_t channel);
-void wifi_ap_stop(void);
+void wifi_ap_stop(uint8_t channel);
 void wifi_set_country(const char* country_code);
 ```
 
@@ -121,8 +121,13 @@ void wifi_set_country(const char* country_code);
 - `wifi_ap_start()`: `esp_now_deinit()` → `WiFi.mode(WIFI_AP)` →
   `WiFi.softAP(ssid, NULL, channel)`. Deinit ESP-NOW *before* switching modes;
   the recv callback will no longer fire once deinit'd.
-- `wifi_ap_stop()`: `WiFi.softAPdisconnect(true)` → `WiFi.mode(WIFI_STA)`.
-  ESP-NOW re-init is the caller's job (see below).
+- `wifi_ap_stop(channel)`: `WiFi.softAPdisconnect(true)` →
+  `WiFi.mode(WIFI_STA)` → `esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE)`.
+  The channel **must** be re-applied: a fresh STA start resets the radio to the
+  default channel (1), and ESP-NOW sends fail ("Peer channel is not equal to
+  the home channel", `ESP_ERR_ESPNOW_CHANNEL`) when `peer.channel` != the
+  radio's current channel. See `docs/research-notes.md` §6a. ESP-NOW re-init is
+  the caller's job (see below).
 - `wifi_set_country()`: Calls `esp_wifi_set_country_code()`. Must run *after*
   `WiFi.mode()` (the WiFi stack is initialized there); the C3's default
   "world-safe" country code (`01`) blocks active use of channel 13.
