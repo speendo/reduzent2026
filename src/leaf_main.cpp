@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <esp_event.h>
 #include <esp_system.h>
 #include <esp32-hal-timer.h>
 
@@ -48,6 +49,7 @@ static char ap_ssid[32];               // settings-mode AP SSID
 static device_mode_t last_hw_mode = MODE_LIVE;  // WiFi/ESP-NOW state matching dev_mode.mode
 static AsyncWebServer server(80);
 static bool parasol_initialized = false;
+static volatile bool leave_settings_request = false;
 static envelope_params_t env;      // ADSR params built from cfg at boot
 
 static render_path_t render_path = RENDER_1BIT;
@@ -268,14 +270,30 @@ static void on_recv(const uint8_t* mac, const uint8_t* data, int len) {
     }
 }
 
+// WiFi AP client tracking — feeds mode_set_clients for timeout pausing.
+static void on_wifi_event(void* arg, esp_event_base_t base, int32_t id, void* data) {
+    if (base == WIFI_EVENT && (id == WIFI_EVENT_AP_STACONNECTED || id == WIFI_EVENT_AP_STADISCONNECTED)) {
+        mode_set_clients(&dev_mode, WiFi.softAPgetStationNum(), millis());
+    }
+}
+
+// parasol save callback: check the _leave_settings switch, then save config.
+static esp_err_t leaf_save_with_leave(void) {
+    const char *v = prsl_get("_system._leave_settings");
+    if (v && strcmp(v, "1") == 0) leave_settings_request = true;
+    return parasol_save_leaf_to_nvs();
+}
+
 // Live -> Settings: silence audio and bring up the settings AP.
 static void enter_settings_mode(void) {
     enter_ledc();                       // stop 1-bit mixer if active; silence piezo LEDC
     ledcWrite(SOLENOID_LEDC_CHANNEL, 0);
     wifi_ap_start(ap_ssid, cfg.espnow_channel);
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED, on_wifi_event, NULL);
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, on_wifi_event, NULL);
     if (!parasol_initialized) {
         parasol_register_leaf_fields();
-        prsl_init(&server, parasol_save_leaf_to_nvs, parasol_load_leaf_from_nvs, NULL);
+        prsl_init(&server, leaf_save_with_leave, parasol_load_leaf_from_nvs, NULL);
         parasol_initialized = true;
     }
     parasol_load_leaf_from_nvs();  // reload saved values into form
@@ -351,6 +369,10 @@ void setup() {
 
 void loop() {
     uint32_t now = millis();
+    if (leave_settings_request && mode_is_settings(&dev_mode)) {
+        mode_request_exit(&dev_mode);
+        leave_settings_request = false;
+    }
     mode_tick(&dev_mode, now);
     if (dev_mode.mode != last_hw_mode) {
         if (mode_is_settings(&dev_mode)) enter_settings_mode();

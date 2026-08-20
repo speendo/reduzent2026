@@ -61,6 +61,10 @@ static inline void parasol_register_leaf_fields(void) {
       prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_sustain_pct", "Sustain (%)", &o); }
     { static const prsl_field_opts_t o = { .attrs = "{'min':0,'max':5000}" };
       prsl_add_field(PRSL_NUMBER, "piezo", "piezo_adsr_release_ms", "Release (ms)", &o); }
+
+    // System (underscore prefix = internal, not persisted to NVS)
+    prsl_add_group("_system", "System");
+    prsl_add_field(PRSL_SWITCH, "_system", "_leave_settings", "Leave Settings Mode", NULL);
 }
 
 // ── Controller field registration ────────────────────────────────
@@ -70,6 +74,10 @@ static inline void parasol_register_controller_fields(void) {
       prsl_add_field(PRSL_NUMBER, "network", "espnow_channel", "ESP-NOW Channel", &o); }
     { static const prsl_field_opts_t o = { .help = "0-300 seconds; 0 = skip at boot", .attrs = "{'min':0,'max':300}" };
       prsl_add_field(PRSL_NUMBER, "network", "settings_window_sec", "Settings Window (s)", &o); }
+
+    // System (underscore prefix = internal, not persisted to NVS)
+    prsl_add_group("_system", "System");
+    prsl_add_field(PRSL_SWITCH, "_system", "_leave_settings", "Leave Settings Mode", NULL);
 }
 
 // ── NVS save callback (leaf) ─────────────────────────────────────

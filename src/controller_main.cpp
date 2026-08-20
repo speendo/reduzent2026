@@ -36,6 +36,7 @@ static char ap_ssid[32];               // settings-mode AP SSID
 static device_mode_t last_hw_mode = MODE_LIVE;  // WiFi/ESP-NOW state matching dev_mode.mode
 static AsyncWebServer server(80);
 static bool parasol_initialized = false;
+static volatile bool leave_settings_request = false;
 
 // on_recv (WiFi task) may not do blocking serial I/O: buffer the frame, flag loop().
 static volatile bool rx_pending = false;
@@ -146,12 +147,28 @@ static void on_serial_event(void* arg, esp_event_base_t base, int32_t event_id, 
 static void on_serial_rx(void) { drain_serial(); }
 #endif
 
+// WiFi AP client tracking — feeds mode_set_clients for timeout pausing.
+static void on_wifi_event(void* arg, esp_event_base_t base, int32_t id, void* data) {
+    if (base == WIFI_EVENT && (id == WIFI_EVENT_AP_STACONNECTED || id == WIFI_EVENT_AP_STADISCONNECTED)) {
+        mode_set_clients(&dev_mode, WiFi.softAPgetStationNum(), millis());
+    }
+}
+
+// parasol save callback: check the _leave_settings switch, then save config.
+static esp_err_t ctrl_save_with_leave(void) {
+    const char *v = prsl_get("_system._leave_settings");
+    if (v && strcmp(v, "1") == 0) leave_settings_request = true;
+    return parasol_save_controller_to_nvs();
+}
+
 // Live -> Settings: bring up the controller's own settings AP.
 static void enter_settings_mode(void) {
     wifi_ap_start(ap_ssid, cfg.espnow_channel);
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED, on_wifi_event, NULL);
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, on_wifi_event, NULL);
     if (!parasol_initialized) {
         parasol_register_controller_fields();
-        prsl_init(&server, parasol_save_controller_to_nvs, parasol_load_controller_from_nvs, NULL);
+        prsl_init(&server, ctrl_save_with_leave, parasol_load_controller_from_nvs, NULL);
         parasol_initialized = true;
     }
     parasol_load_controller_from_nvs();
@@ -243,6 +260,10 @@ void loop() {
 
     static uint32_t next_keepalive = 0; // first keepalive fires at boot (no-op)
     uint32_t now = millis();
+    if (leave_settings_request && mode_is_settings(&dev_mode)) {
+        mode_request_exit(&dev_mode);
+        leave_settings_request = false;
+    }
     mode_tick(&dev_mode, now);
     if (dev_mode.mode != last_hw_mode) {
         if (mode_is_settings(&dev_mode)) enter_settings_mode();
