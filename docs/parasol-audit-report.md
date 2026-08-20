@@ -126,6 +126,15 @@ The top-bar navigation groups span the full horizontal width,
 which causes text truncation / horizontal scroll on narrow phone
 screens. A responsive layout or collapsible menu would help.
 
+**9. Save button has no loading/success feedback (LOW).**
+Clicking Save sends an HTTP POST to `/api/settings/save`. The button
+visibly disappears only after the response returns and the WebSocket
+push with `_dirty: false` arrives. There is no spinner, disabled state,
+or success toast during the round-trip. On slow connections or when the
+firmware is slow to return, the user has no indication anything is
+happening. A brief `aria-busy="true"` + a success checkmark would fix
+this.
+
 ### Documentation Issues
 
 **1. Stale version references.**
