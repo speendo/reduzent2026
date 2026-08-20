@@ -104,6 +104,11 @@ Based on `docs/nvs-config-spec.md`:
 | Sustain (%) | NUMBER | piezo_adsr_sustain_pct | 0-100 | 70 |
 | Release (ms) | NUMBER | piezo_adsr_release_ms | 0-5000 | 100 |
 
+#### Group: "_system" (Internal, not persisted)
+| Field | Type | Key | Notes |
+|-------|------|-----|-------|
+| Leave Settings Mode | SWITCH | _leave_settings | Underscore prefix = not saved to NVS. When toggled on and Save is clicked, the save callback triggers `mode_request_exit()` and the device returns to live mode immediately. |
+
 ### Controller Settings Groups
 
 #### Group: "network" (WiFi / ESP-NOW)
@@ -111,6 +116,11 @@ Based on `docs/nvs-config-spec.md`:
 |-------|------|-----|-------|---------|
 | ESP-NOW Channel | NUMBER | espnow_channel | 1-14 | 13 |
 | Settings Window (s) | NUMBER | settings_window_sec | 0-300 | 30 |
+
+#### Group: "_system" (Internal, not persisted)
+| Field | Type | Key | Notes |
+|-------|------|-----|-------|
+| Leave Settings Mode | SWITCH | _leave_settings | Same behavior as leaf — triggers `mode_request_exit()` on save. |
 
 ### Save Callback
 
@@ -122,9 +132,12 @@ esp_err_t parasol_save_to_nvs(void);
 
 **Implementation:**
 1. Read all field values via `prsl_get()`
-2. Update the config struct (leaf_config_t or controller_config_t)
-3. Call `config_save()` to persist to NVS
-4. Return ESP_OK on success
+2. Check `_system._leave_settings` — if "1", set `leave_settings_request = true`
+   (the device will exit settings on the next `mode_tick()` call)
+3. Update the config struct (leaf_config_t or controller_config_t)
+4. Call `config_save()` to persist to NVS (the `_leave_settings` switch is
+   underscore-prefixed and therefore skipped by the save logic)
+5. Return ESP_OK on success
 
 **Validation:** reuse the range-check/parse helpers from Step 1
 (`config_parser.h`), so parasol and serial `cfgset` accept exactly the same

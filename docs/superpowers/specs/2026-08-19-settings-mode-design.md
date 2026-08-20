@@ -37,23 +37,56 @@ typedef struct {
     device_mode_t mode;
     uint32_t      settings_start_ms;   // millis() when settings entered
     uint32_t      settings_window_ms;  // timeout duration (default 30000)
+    uint8_t       client_count;        // WiFi AP clients currently connected
+    uint32_t      grace_start_ms;      // millis() when grace period started; 0 = not in grace
+    bool          exit_requested;      // set by parasol "leave settings" action
 } mode_state_t;
+
+#define MODE_GRACE_MS 7000  // grace period after last client disconnects
 
 void     mode_init(mode_state_t* s, uint32_t settings_window_ms);
 void     mode_enter_settings(mode_state_t* s, uint32_t now);
 void     mode_exit_settings(mode_state_t* s);
+void     mode_set_clients(mode_state_t* s, uint8_t count, uint32_t now);
+void     mode_request_exit(mode_state_t* s);
 bool     mode_tick(mode_state_t* s, uint32_t now);  // returns true if mode changed
 bool     mode_is_settings(const mode_state_t* s);
 ```
 
 **Behavior:**
-- `mode_init()`: Sets mode to MODE_LIVE, stores timeout duration
-  (`settings_window_ms` comes from `cfg.settings_window_sec * 1000`)
-- `mode_enter_settings()`: Sets mode to MODE_SETTINGS, records start time
-- `mode_exit_settings()`: Sets mode to MODE_LIVE
-- `mode_tick()`: If in MODE_SETTINGS and timeout expired, calls exit_settings()
-  and returns true. Otherwise returns false.
+- `mode_init()`: Sets mode to MODE_LIVE, stores timeout duration, zeroes client
+  count and grace state.
+- `mode_enter_settings()`: Sets mode to MODE_SETTINGS, records start time,
+  clears grace and exit request.
+- `mode_exit_settings()`: Sets mode to MODE_LIVE, clears grace and exit request.
+- `mode_set_clients()`: Called from WiFi AP event handlers when a station
+  connects or disconnects. When the last client disconnects (`prev > 0 && count
+  == 0`), starts the 7-second grace period. If a client reconnects during grace,
+  cancels it.
+- `mode_request_exit()`: Sets `exit_requested` flag (triggered by parasol
+  `_leave_settings` switch in the UI).
+- `mode_tick()`: The core timer logic:
+  1. If `exit_requested` → exit immediately (parasol checkbox)
+  2. If clients connected (`client_count > 0`) → pause (stay indefinitely)
+  3. If grace period active → count down; exit when grace expires
+  4. Otherwise → count down the main timeout; exit when it expires
 - `mode_is_settings()`: Simple mode check
+
+**Timeout pausing:** The settings timeout only counts time when no WiFi clients
+are connected. Once a phone/laptop connects to the AP, the timer pauses and the
+device stays in settings mode indefinitely. This prevents the device from
+timing out while the user is actively configuring it.
+
+**Grace period:** When the last client disconnects (e.g., phone goes to sleep,
+WiFi glitch), a 7-second grace period starts. If the user reconnects within that
+window, they resume where they left off. If the grace expires, the device
+returns to live mode. This handles accidental disconnects without keeping
+settings mode open forever.
+
+**Leave settings switch:** The parasol UI includes a `_leave_settings` switch
+(underscore prefix = internal, not persisted to NVS). When the user checks it
+and clicks Save, the save callback sets `exit_requested`, and the next
+`mode_tick()` exits to live. This gives the user an explicit "I'm done" action.
 
 **Boot behavior differs by role:**
 - **Controller:** after `mode_init()`, if `cfg.settings_window_sec > 0`, call
@@ -100,8 +133,8 @@ not in wifi_ap.h, because each firmware registers different callbacks.
 
 **File:** `src/leaf_main.cpp`
 
-1. Add includes: `mode.h`, `config.h`
-2. Add static state: `static mode_state_t dev_mode;`
+1. Add includes: `mode.h`, `config.h`, `<esp_event.h>`
+2. Add static state: `static mode_state_t dev_mode;`, `static volatile bool leave_settings_request = false;`
 3. In `setup()`:
    - Call `config_defaults(&cfg)` + `config_load("leaf_cfg", &cfg)`
    - Replace hardcoded `#define`s with `cfg.*` fields
@@ -113,6 +146,7 @@ not in wifi_ap.h, because each firmware registers different callbacks.
      MVP: the controller broadcasts (0xFF) and all leaves enter; targeted
      (`settings <id>`) works once `node_id` is assigned.
 5. In `loop()`:
+   - Check `leave_settings_request` → call `mode_request_exit()` if set
    - Add `mode_tick(&dev_mode, now)` check
    - If mode changed to settings: silence audio, then call `wifi_ap_start()`
    - If mode changed to live: re-init audio, then `wifi_ap_stop()` + reinit ESP-NOW
@@ -123,13 +157,20 @@ not in wifi_ap.h, because each firmware registers different callbacks.
    - `solenoid_tick` and `voice_watchdog` may keep running (no new input arrives)
 7. Add `settings_window_sec` and `node_id` to `leaf_config_t` in config.h
    (promoted from the config spec's "Future settings"; spec updated accordingly)
+8. WiFi AP event handlers: register `WIFI_EVENT_AP_STACONNECTED` and
+   `WIFI_EVENT_AP_STADISCONNECTED` handlers in `enter_settings_mode()` that call
+   `mode_set_clients(&dev_mode, WiFi.softAPgetStationNum(), millis())`.
+9. parasol save callback: wrap `parasol_save_leaf_to_nvs()` to check the
+   `_leave_settings` switch (`prsl_get("_system._leave_settings")`) and set
+   `leave_settings_request = true` before saving. Register via
+   `prsl_init(&server, leaf_save_with_leave, ...)`.
 
 ### Controller Firmware Changes
 
 **File:** `src/controller_main.cpp`
 
-1. Add includes: `mode.h`, `config.h`
-2. Add static state: `static mode_state_t dev_mode;`
+1. Add includes: `mode.h`, `config.h`, `<esp_event.h>`
+2. Add static state: `static mode_state_t dev_mode;`, `static volatile bool leave_settings_request = false;`
 3. In `setup()`:
    - Call `config_defaults(&cfg)` + `config_load("ctrl_cfg", &cfg)`
    - Replace hardcoded `#define ESP_NOW_CHANNEL` with `cfg.espnow_channel`
@@ -144,11 +185,19 @@ not in wifi_ap.h, because each firmware registers different callbacks.
      own settings mode.
    - Add `cfgget`/`cfgset`/`cfgsave`/`cfgreset` command handling (from Step 1)
 5. In `loop()`:
+   - Check `leave_settings_request` → call `mode_request_exit()` if set
    - Add `mode_tick(&dev_mode, now)` check
    - If mode changed to settings: call `wifi_ap_start(ssid, cfg.espnow_channel)`
    - If mode changed to live: call `wifi_ap_stop()` + reinit ESP-NOW
    - In settings mode, skip `send_keepalive()` — ESP-NOW is down
 6. Add `settings_window_sec` to `controller_config_t` in config.h
+7. WiFi AP event handlers: same pattern as leaf — register
+   `WIFI_EVENT_AP_STACONNECTED`/`WIFI_EVENT_AP_STADISCONNECTED` handlers in
+   `enter_settings_mode()` that call `mode_set_clients()`.
+8. parasol save callback: same pattern as leaf — wrap
+   `parasol_save_controller_to_nvs()` to check `_leave_settings` switch and set
+   `leave_settings_request`. Register via
+   `prsl_init(&server, ctrl_save_with_leave, ...)`.
 
 ### Text Parser Extension
 
@@ -222,14 +271,23 @@ move from the config spec's "Future settings" into the active structs —
    - Test mode_enter_settings switches to MODE_SETTINGS
    - Test mode_tick timeout triggers exit
    - Test mode_is_settings returns correct state
+   - Test mode_set_clients: client connects → timeout pauses
+   - Test mode_set_clients: last client disconnects → grace period starts
+   - Test mode_set_clients: client reconnects during grace → grace cancelled
+   - Test mode_tick: grace period expires → exit
+   - Test mode_request_exit: sets flag, next tick exits
 
 2. **Integration test** (hardware): Boot → enter settings → WiFi AP starts →
-   connect phone → verify parasol UI → timeout → back to live mode
+   connect phone → verify parasol UI → phone disconnects → 7s grace → back to
+   live mode. Also: connect phone → timeout pauses → reconnect after disconnect
+   → grace cancelled → stays in settings.
 
 3. **Manual test**:
    - Serial `settings` on controller triggers leaves' settings mode via ESP-NOW
      (broadcast) and the controller's own settings mode
    - `settings <id>` targets a single leaf (requires node_id assigned)
+   - Toggle `_leave_settings` switch in parasol UI → Save → device exits
+     settings immediately
 
 ## Backlog
 
