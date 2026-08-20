@@ -984,6 +984,8 @@ def main() -> None:
         finally:
             stop_event.set()
             inport.callback = None
+            for _ in range(3):
+                emit("panic")
             with lock:
                 state["ser"] = None
                 ser.close()

@@ -413,6 +413,11 @@ def main() -> None:
         finally:
             inport.callback = None
             with lock:
+                s = state["ser"]
+                if s is not None:
+                    for _ in range(3):
+                        s.write(b"panic\n")
+            with lock:
                 state["ser"] = None
                 ser.close()
             inport.close()
