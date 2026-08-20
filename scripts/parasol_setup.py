@@ -8,18 +8,24 @@ Runs before the build to:
 4. Patch prsl.h and prsl.cpp to fix const-correctness
 """
 
+import gzip
+import json
 import os
 Import("env")  # noqa: F821 – PlatformIO SCons global
 
 
 def find_parasol_dirs():
-    """Find all parasol library directories in libdeps."""
-    dirs = []
-    for base in [".pio/libdeps/leaf", ".pio/libdeps/controller"]:
-        p = os.path.join(base, "parasol")
-        if os.path.isdir(p):
-            dirs.append(p)
-    return dirs
+    """Return only the current environment's parasol library directory.
+
+    Each env gets its own copy under .pio/libdeps/<env>/parasol. Processing
+    every env's copy from every pre-script caused concurrent asset generation
+    to the same files (cmake -P writing prsl_assets.c in parallel), which
+    interleaved writes and produced corrupt byte arrays. Scope to the env
+    actually being built so each copy is written exactly once, by one process.
+    """
+    env_name = env.subst("$PIOENV")
+    p = os.path.join(".pio", "libdeps", env_name, "parasol")
+    return [p] if os.path.isdir(p) else []
 
 
 def assets_stale(parasol_dir, config_path):
@@ -48,7 +54,14 @@ def assets_stale(parasol_dir, config_path):
 
 
 def generate_assets(parasol_dir):
-    """Generate prsl_assets.h and prsl_assets.c by invoking the existing CMake script."""
+    """Generate prsl_assets.h and prsl_assets.c from parasol source assets.
+
+    Pure Python: read the source index.html / app.min.js / pico CSS, inject
+    the parasol_config.json values, gzip, and emit C byte arrays. This does
+    not depend on parasol's generate_assets.cmake, whose released v0.6.3
+    version is broken (a foreach() with ';'-joined values splits JS content on
+    semicolons, so fresh downloads fail with "File name too long").
+    """
     src_dir = os.path.join(parasol_dir, "src")
     assets_h = os.path.join(src_dir, "prsl_assets.h")
     assets_c = os.path.join(src_dir, "prsl_assets.c")
@@ -57,32 +70,78 @@ def generate_assets(parasol_dir):
     if not assets_stale(parasol_dir, config_path):
         return
 
-    import subprocess
-    cmake_script = os.path.join(parasol_dir, "cmake", "generate_assets.cmake")
-    out_dir = os.path.join(parasol_dir, "generated")
-    os.makedirs(out_dir, exist_ok=True)
+    # Read config
+    config = {}
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            config = json.load(f)
 
-    cmd = [
-        "cmake",
-        f"-DASSETS_SRC={parasol_dir}",
-        f"-DCONFIG_FILE={config_path}",
-        f"-DOUT_DIR={out_dir}",
-        "-P", cmake_script,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"[parasol] CMake asset generation failed:\n{result.stderr}")
-        return
+    title = config.get("title", "PARASOL")
+    logo = config.get("logo", "/logo.png")
+    favicon = config.get("favicon", "/favicon.ico")
+    always_show_save = "1" if config.get("always_show_save", False) else "0"
 
-    # Move generated files to src/ where parasol expects them
-    import shutil
-    for name in ["prsl_assets.h", "prsl_assets.c"]:
-        src = os.path.join(out_dir, name)
-        dst = os.path.join(src_dir, name)
-        if os.path.exists(src):
-            shutil.copy2(src, dst)
+    with open(os.path.join(parasol_dir, "index.html"), "r") as f:
+        html = f.read()
+    html = html.replace("{{TITLE}}", title)
+    html = html.replace("{{LOGO}}", logo)
+    html = html.replace("{{FAVICON}}", favicon)
+    html = html.replace("{{ALWAYS_SHOW_SAVE}}", always_show_save)
 
-    print(f"[parasol] Generated prsl_assets.h and prsl_assets.c via CMake in {src_dir}")
+    with open(os.path.join(parasol_dir, "app.min.js"), "r") as f:
+        js = f.read()
+    with open(os.path.join(parasol_dir, "pico.jade.min.css"), "r") as f:
+        css = f.read()
+
+    html_gz = gzip.compress(html.encode("utf-8"), compresslevel=9)
+    js_gz = gzip.compress(js.encode("utf-8"), compresslevel=9)
+    css_gz = gzip.compress(css.encode("utf-8"), compresslevel=9)
+
+    os.makedirs(src_dir, exist_ok=True)
+
+    def hex_dump(data):
+        parts = []
+        for i, b in enumerate(data):
+            parts.append(f"0x{b:02x}")
+            if i < len(data) - 1:
+                parts.append(",")
+            if (i + 1) % 12 == 0 and i < len(data) - 1:
+                parts.append("\n    ")
+        return "".join(parts)
+
+    def write_byte_array(f, var_name, data):
+        f.write(f"const uint8_t {var_name}[] = {{\n    {hex_dump(data)}\n}};\n")
+        f.write(f"const size_t {var_name}_len = {len(data)};\n\n")
+
+    with open(assets_h, "w") as f:
+        f.write("""#pragma once
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct {
+    const char *path;
+    const char *mime;
+    const uint8_t *data;
+    size_t len;
+} prsl_asset_t;
+
+extern const prsl_asset_t prsl_assets[];
+extern const size_t prsl_assets_count;
+""")
+
+    with open(assets_c, "w") as f:
+        f.write('#include "prsl_assets.h"\n\n')
+        write_byte_array(f, "index_html_gz", html_gz)
+        write_byte_array(f, "app_min_js_gz", js_gz)
+        write_byte_array(f, "pico_jade_min_css_gz", css_gz)
+        f.write("const prsl_asset_t prsl_assets[] = {\n")
+        f.write('    {"/", "text/html", index_html_gz, index_html_gz_len},\n')
+        f.write('    {"/app.min.js", "application/javascript", app_min_js_gz, app_min_js_gz_len},\n')
+        f.write('    {"/pico.jade.min.css", "text/css", pico_jade_min_css_gz, pico_jade_min_css_gz_len},\n')
+        f.write("};\n")
+        f.write("const size_t prsl_assets_count = 3;\n")
+
+    print(f"[parasol] Generated prsl_assets.h and prsl_assets.c in {src_dir}")
 
 
 def patch_prsl_store_h(parasol_dir):
