@@ -40,8 +40,10 @@ This matters on constrained MCUs.
 status fields without polling. The browser re-renders automatically.
 
 **Pico CSS.** The default UI is clean and functional with zero
-configuration. Forms render correctly and the save/reset/reboot
-buttons work as documented.
+configuration. Forms render correctly. The reset/reboot buttons work as
+documented; **the Save button does not** — see Issues 10-12 below (persistence
+requires firmware to drive `prsl_set_dirty()` and an `on_set` callback that
+writes the store, neither of which the docs make obvious).
 
 **Native test suite.** 132/132 tests pass in the native environment.
 The FreeRTOS stub approach for host testing is well-executed and
@@ -135,6 +137,76 @@ firmware is slow to return, the user has no indication anything is
 happening. A brief `aria-busy="true"` + a success checkmark would fix
 this.
 
+**10. on_set callback must write the store itself; the shipped example doesn't (HIGH).**
+In `prsl_apply_body()` (`src/prsl_body.c`), when a field registers `on_set`,
+the library does **not** update the store — the callback is fully responsible
+for validating *and* persisting the value (via `prsl_set_str`). The
+`else if (f)` branch (store write) is skipped whenever `on_set` exists.
+`API_REFERENCE.md` describes `on_set` as merely "React to value changes …
+return ESP_OK to accept", and `examples/basic/main.c` (`on_ssid_change`)
+only prints + validates without calling `prsl_set_str`. Following the
+documented example, applied values are silently dropped and the save
+callback persists the stale value. Either the docs must state that `on_set`
+must call `prsl_set_str`, or the library should store the value itself.
+
+**11. prsl_get() only returns string values; typed setters are unreadable (MEDIUM).**
+`prsl_get()` (`src/prsl.cpp`) returns NULL unless the stored cJSON node is a
+string (`cJSON_IsString`). `prsl_set_int()` / `prsl_set_float()` /
+`prsl_set_bool()` store JSON numbers/booleans, so a firmware that loads values
+with typed setters (a common pattern for a load callback) and reads them back
+with `prsl_get()` in the save callback silently gets NULL and can persist
+defaults. `API_REFERENCE.md`'s PRSL_NUMBER row ("Value is string, server
+serializes as JSON number") hints at this but the string-only `prsl_get`
+contract is not stated explicitly. Recommend `prsl_set_str` for any value the
+firmware needs to read back, and a docs note that `prsl_get` is string-only.
+
+**12. The library never sets _dirty; Save can be a silent no-op (MEDIUM).**
+`_dirty` is only ever *cleared* by the library (on save success) — never set.
+The browser applies changes over the WebSocket immediately, the server echoes
+`_dirty: false`, and the client re-syncs its per-field baseline. The client's
+Save click posts `/api/settings/save` only while `_dirty` is true (or a field
+is un-echoed, which resolves in milliseconds). So if the firmware never calls
+`prsl_set_dirty(true)`, the Save button click sends **no POST at all** and
+nothing persists — with no error shown. The "developer-driven" contract is
+documented, but the sharp consequence (a dead, feedback-free Save button) is
+not called out.
+
+**13. Underscore-prefixed groups are silently dropped end-to-end (MEDIUM).**
+The browser JS filters out any group whose id starts with `_`
+(`if("_"!==i[0])` in `O()`/`S()`/`W()` of `app.min.js`), and
+`prsl_apply_body` skips `group->string[0]=='_'`. So a `_system` group (as we
+initially used for the internal "leave settings" switch) is never rendered,
+never applied, and never read back. The spec labels underscore keys "meta
+fields, never components", but this is easy to miss — a firmware author picks
+`_system` for internal fields and gets an invisible section with no warning.
+Worth an explicit warning + troubleshooting entry.
+
+**14. Save body handler is broken for real saves (HIGH — confirmed on hardware).**
+The `/api/settings/save` handler (`prsl.cpp`) has two bugs that together made
+every real save fail with `400`:
+- `cJSON_ParseWithLength((const char *)data, total)` parses `total` bytes from
+  the chunk pointer. ESPAsyncWebServer's `handleBody` passes one buffer per
+  TCP read (verified in `WebRequest.cpp`/`WebHandlers.cpp`) and does not
+  accumulate, so any body arriving in more than one read over-reads the chunk
+  and fails with `Invalid JSON`.
+- `cJSON_GetObjectItem(msg, "data")` expects a top-level `"data"` wrapper, but
+  the browser posts the settings object directly (and `WS_PROTOCOL.md`/the
+  architecture spec document the body without a wrapper), so a successfully
+  parsed body fails with `Missing data`.
+
+Workaround: `parasol_setup.py` now patches `prsl.cpp` to accumulate the body
+in `request->_tempObject`, act on the final chunk (`index + len == total`),
+and apply the parsed object itself as the body.
+
+**15. Reset button is always visible (LOW — by design, awkward).**
+The client's `x()` shows Reset whenever an `on_reset` callback exists
+(`a.hidden = !(c || h)`, `h = _show_reset`), independent of dirty state. On a
+clean form there is nothing to reset, so the button looks like a bug. Also,
+the `/api/settings/reset` endpoint calls `on_reset` but never clears `_dirty`,
+so even after resetting, the button (and Save) stay visible. Workarounds in
+reduzent: `parasol_setup.py` patches `app.min.js` (`a.hidden=!c` → show Reset
+only while dirty), and the load/reset callback calls `prsl_set_dirty(false)`.
+
 ### Documentation Issues
 
 **1. Stale version references.**
@@ -157,7 +229,9 @@ ESP32 Arduino projects, this is a significant gap.
 **4. No troubleshooting section.**
 Common issues (asset generation, dependency conflicts, C++ compound
 literals) are not documented anywhere. Users will hit these same
-walls.
+walls. Missing also: the Issues 10-13 traps (on_set must write the store,
+prsl_get is string-only, dirty must be set by firmware, no `_`-prefixed
+groups).
 
 **5. CHANGELOG.md stops at 0.6.0.**
 The changelog has entries for 0.1.0 through 0.6.0 but no entry for
@@ -220,8 +294,12 @@ superpowers workflow context.
   This is documented but easy to miss in practice.
 
 - The `parasol_config.json` file (`lib/reduzent/parasol_config.json`)
-  controls page title, logo, and favicon. The `always_show_save: true`
-  setting is useful for settings-only modes.
+  controls page title, logo, and favicon. `always_show_save: true` keeps the
+  Save button permanently visible (useful for settings-only modes); reduzent
+  uses `false` so the button appears on change and hides after a successful
+  save. **Config changes require regenerating the baked-in assets** — the
+  PlatformIO extra_script only regenerates when the assets are missing or the
+  config file is newer (see `scripts/parasol_setup.py`).
 
 - The WebSocket protocol is clean and well-documented. The partial-apply
   pattern is efficient for constrained devices.
@@ -233,3 +311,14 @@ superpowers workflow context.
   `prsl_set_dirty(true)` when external state changes. This is
   correct for our use case (MIDI-triggered config changes) but
   requires discipline.
+
+**Save-flow debugging findings (2026-08-20, see Issues 10-13):** our first
+integration followed the documented example (fields with `on_set` = NULL,
+values loaded via `prsl_set_int`, no `prsl_set_dirty`), and the result was
+that the Save button appeared but clicking it persisted nothing — no POST ever
+reached the firmware (client-side `_dirty` never true, baseline re-synced via
+the WS echo), and even if it had, `prsl_get` would have read NULL for the
+int-loaded fields and the save would have clobbered unchanged settings to
+defaults. Working integration requires, per field: an `on_set` that validates,
+writes the value via `prsl_set_str`, and calls `prsl_set_dirty(true)`; load
+values as strings; and keep group ids free of a leading underscore.

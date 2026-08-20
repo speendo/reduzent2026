@@ -41,6 +41,13 @@ lib_deps =
 (actual releases: v0.6.3 / v0.5.1 / v0.5.0). Verify the exact asset filename at
 install time.
 
+**parasol is patched at build time** by `scripts/parasol_setup.py` (in addition
+to the struct/const fixes in the audit): the `/api/settings/save` handler is
+rewritten to accumulate the chunked body and accept the settings object
+directly (no `"data"` wrapper), and `app.min.js` shows the Reset button only
+while dirty. See `docs/parasol-audit-report.md` Issues 10-15. Pin v0.6.3
+explicitly — the patches are string-based and may break on other versions.
+
 **Spike before Step 4:** build parasol + ESPAsyncWebServer for the C3 env as a
 throwaway proof before wiring any firmware. The C3 has ~320 KB usable SRAM and
 AP + ESPAsyncWebServer + parasol assets is tight; confirm it links and runs
@@ -50,6 +57,26 @@ before committing to the integration.
 
 **Approach:** Register fields in a shared module that both firmwares can use,
 with firmware-specific fields added separately.
+
+**Every field registers the same `on_set` callback.** parasol does not update
+the store when a field has `on_set` (only the no-callback branch stores the
+value), and the library never sets `_dirty` itself. So the shared callback
+must: validate the value (`config_reject_field`), write it into the store
+(`prsl_set_str`), and mark the settings dirty (`prsl_set_dirty(true)`). Without
+it, the Save button never triggers a POST and changes are lost (see
+`docs/parasol-audit-report.md` Issues 10-12).
+
+```c
+static esp_err_t parasol_on_field_change(const char* group_id, const char* key,
+                                         const char* value) {
+    if (config_reject_field(key, value) != 0) return ESP_ERR_INVALID_ARG;
+    char path[64];
+    snprintf(path, sizeof(path), "%s.%s", group_id, key);
+    prsl_set_str(path, value);
+    prsl_set_dirty(true);
+    return ESP_OK;
+}
+```
 
 **File:** `lib/reduzent/parasol_setup.h` (new)
 
@@ -104,10 +131,16 @@ Based on `docs/nvs-config-spec.md`:
 | Sustain (%) | NUMBER | piezo_adsr_sustain_pct | 0-100 | 70 |
 | Release (ms) | NUMBER | piezo_adsr_release_ms | 0-5000 | 100 |
 
-#### Group: "_system" (Internal, not persisted)
+#### Group: "system" (Internal, not persisted)
+
+> Group id must **not** start with an underscore: parasol's browser JS and
+> `prsl_apply_body` silently drop underscore-prefixed groups (they are treated
+> as meta fields). The field key `_leave_settings` keeps its underscore (only
+> the *group* is filtered).
+
 | Field | Type | Key | Notes |
 |-------|------|-----|-------|
-| Leave Settings Mode | SWITCH | _leave_settings | Underscore prefix = not saved to NVS. When toggled on and Save is clicked, the save callback triggers `mode_request_exit()` and the device returns to live mode immediately. |
+| Leave Settings Mode | SWITCH | _leave_settings | Underscore key = not saved to NVS. When toggled on and Save is clicked, the save callback triggers `mode_request_exit()` and the device returns to live mode immediately. |
 
 ### Controller Settings Groups
 
@@ -117,10 +150,10 @@ Based on `docs/nvs-config-spec.md`:
 | ESP-NOW Channel | NUMBER | espnow_channel | 1-14 | 13 |
 | Settings Window (s) | NUMBER | settings_window_sec | 0-300 | 30 |
 
-#### Group: "_system" (Internal, not persisted)
+#### Group: "system" (Internal, not persisted)
 | Field | Type | Key | Notes |
 |-------|------|-----|-------|
-| Leave Settings Mode | SWITCH | _leave_settings | Same behavior as leaf — triggers `mode_request_exit()` on save. |
+| Leave Settings Mode | SWITCH | _leave_settings | Same behavior as leaf — triggers `mode_request_exit()` on save. Group id has no underscore prefix (see leaf note). |
 
 ### Save Callback
 
@@ -132,7 +165,8 @@ esp_err_t parasol_save_to_nvs(void);
 
 **Implementation:**
 1. Read all field values via `prsl_get()`
-2. Check `_system._leave_settings` — if "1", set `leave_settings_request = true`
+2. Check `system._leave_settings` — if `"true"` (parasol sends the switch as a
+   boolean string), set `leave_settings_request = true`
    (the device will exit settings on the next `mode_tick()` call)
 3. Update the config struct (leaf_config_t or controller_config_t)
 4. Call `config_save()` to persist to NVS (the `_leave_settings` switch is
@@ -144,6 +178,8 @@ esp_err_t parasol_save_to_nvs(void);
 values. `prsl_get()` returns strings; convert and validate through the shared
 helpers before writing the struct. (Number fields also carry `min`/`max`
 `attrs` for browser-side validation, but the firmware is the authority.)
+`config_validate_field` now covers every leaf field (the Step 4 gap below is
+resolved).
 
 > **Gap for the Step 4 plan:** Step 1's `config_parser.h` validates only the
 > two controller fields (`espnow_channel`, `settings_window_sec`). parasol must
@@ -161,8 +197,19 @@ esp_err_t parasol_load_from_nvs(void);
 
 **Implementation:**
 1. Call `config_load()` to read from NVS
-2. Update all field values via `prsl_set_*()` functions
+2. Update all field values via `prsl_set_str` (formatted strings, NOT the
+   typed setters) — `prsl_get()` only returns string-typed values, so values
+   loaded via `prsl_set_int`/`prsl_set_bool` would read back as NULL in the
+   save callback and silently fall back to defaults
 3. Return ESP_OK on success
+
+```c
+static inline void prsl_set_int_as_str(const char* path, int value) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", value);
+    prsl_set_str(path, buf);
+}
+```
 
 ### parasol Configuration
 
@@ -174,9 +221,17 @@ esp_err_t parasol_load_from_nvs(void);
     "title": "reduzent",
     "logo": "/logo.png",
     "favicon": "/favicon.ico",
-    "always_show_save": true
+    "always_show_save": false
 }
 ```
+
+`always_show_save: false` + `prsl_set_dirty(true)` in `on_set` gives the
+standard UX: the Save button appears when there are unsaved changes and hides
+after a successful save. (`true` would keep it permanently visible — use for
+settings-only modes.) **The value is baked into the served page at build time;**
+changing the config requires regenerating the assets (the PlatformIO
+extra_script now does this automatically when the config file is newer than
+the generated assets).
 
 ### Integration with Settings Mode
 

@@ -84,9 +84,15 @@ returns to live mode. This handles accidental disconnects without keeping
 settings mode open forever.
 
 **Leave settings switch:** The parasol UI includes a `_leave_settings` switch
-(underscore prefix = internal, not persisted to NVS). When the user checks it
-and clicks Save, the save callback sets `exit_requested`, and the next
-`mode_tick()` exits to live. This gives the user an explicit "I'm done" action.
+in the `system` group (underscore *key* = internal, not persisted to NVS). When
+the user checks it and clicks Save, the save callback sets `exit_requested`,
+and the next `mode_tick()` exits to live. This gives the user an explicit
+"I'm done" action.
+
+> The group id is `system`, **not** `_system`: parasol's browser JS and
+> `prsl_apply_body` silently drop underscore-prefixed groups (treated as meta
+> fields), so a `_system` section never renders. The save callback reads the
+> switch as a boolean string (`"true"`), not `"1"`.
 
 **Boot behavior differs by role:**
 - **Leaf:** after `mode_init()`, if `cfg.settings_window_sec > 0`, call
@@ -162,9 +168,12 @@ not in wifi_ap.h, because each firmware registers different callbacks.
    `WIFI_EVENT_AP_STADISCONNECTED` handlers in `enter_settings_mode()` that call
    `mode_set_clients(&dev_mode, WiFi.softAPgetStationNum(), millis())`.
 9. parasol save callback: wrap `parasol_save_leaf_to_nvs()` to check the
-   `_leave_settings` switch (`prsl_get("_system._leave_settings")`) and set
+   `_leave_settings` switch (`prsl_get("system._leave_settings")`) and set
    `leave_settings_request = true` before saving. Register via
    `prsl_init(&server, leaf_save_with_leave, ...)`.
+   Every registered field gets the shared `on_set` callback (validate + store +
+   `prsl_set_dirty(true)`) — parasol does not store `on_set` values itself and
+   never sets `_dirty`, so without it the Save button never persists.
 
 ### Controller Firmware Changes
 
@@ -195,7 +204,8 @@ not in wifi_ap.h, because each firmware registers different callbacks.
    `WIFI_EVENT_AP_STACONNECTED`/`WIFI_EVENT_AP_STADISCONNECTED` handlers in
    `enter_settings_mode()` that call `mode_set_clients()`.
 8. parasol save callback: same pattern as leaf — wrap
-   `parasol_save_controller_to_nvs()` to check `_leave_settings` switch and set
+   `parasol_save_controller_to_nvs()` to check `_leave_settings` switch
+   (`prsl_get("system._leave_settings")`, boolean string `"true"`) and set
    `leave_settings_request`. Register via
    `prsl_init(&server, ctrl_save_with_leave, ...)`.
 

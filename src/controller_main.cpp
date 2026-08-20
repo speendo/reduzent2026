@@ -159,8 +159,8 @@ static void on_wifi_event(void* arg, esp_event_base_t base, int32_t id, void* da
 
 // parasol save callback: check the _leave_settings switch, then save config.
 static esp_err_t ctrl_save_with_leave(void) {
-    const char *v = prsl_get("_system._leave_settings");
-    if (v && strcmp(v, "1") == 0) leave_settings_request = true;
+    const char *v = prsl_get("system._leave_settings");
+    if (config_leave_settings_requested(v)) leave_settings_request = true;
     return parasol_save_controller_to_nvs();
 }
 

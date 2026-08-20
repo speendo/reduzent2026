@@ -132,6 +132,42 @@ void test_validate_not_a_number(void) {
     TEST_ASSERT_EQUAL(-1, config_validate_field("espnow_channel", "abc"));
 }
 
+/* parasol on_set gate: config_reject_field() must accept valid values,
+   reject invalid ones, and never reject internal (underscore) keys.
+   The fixed firmware calls prsl_set_dirty(true) only when this accepts. */
+void test_reject_field_accepts_valid(void) {
+    TEST_ASSERT_EQUAL(0, config_reject_field("espnow_channel", "13"));
+    TEST_ASSERT_EQUAL(0, config_reject_field("settings_window_sec", "0"));
+    TEST_ASSERT_EQUAL(0, config_reject_field("node_id", "254"));
+    TEST_ASSERT_EQUAL(0, config_reject_field("channel", "15"));
+    TEST_ASSERT_EQUAL(0, config_reject_field("actuator", "1"));
+    TEST_ASSERT_EQUAL(0, config_reject_field("piezo_adsr_sustain_pct", "100"));
+}
+
+void test_reject_field_rejects_invalid(void) {
+    TEST_ASSERT_NOT_EQUAL(0, config_reject_field("espnow_channel", "15"));
+    TEST_ASSERT_NOT_EQUAL(0, config_reject_field("espnow_channel", "abc"));
+    TEST_ASSERT_NOT_EQUAL(0, config_reject_field("node_id", "255"));
+    TEST_ASSERT_NOT_EQUAL(0, config_reject_field("unknown_key", "42"));
+    /* NULL value (cleared field) must not crash: treated as empty -> out of range */
+    TEST_ASSERT_NOT_EQUAL(0, config_reject_field("espnow_channel", NULL));
+}
+
+void test_reject_field_internal_never_rejected(void) {
+    TEST_ASSERT_EQUAL(0, config_reject_field("_leave_settings", "true"));
+    TEST_ASSERT_EQUAL(0, config_reject_field("_leave_settings", "false"));
+    TEST_ASSERT_EQUAL(0, config_reject_field("_leave_settings", NULL));
+}
+
+/* Leave-settings switch: parasol sends boolean "true"/"false" strings. */
+void test_leave_settings_requested(void) {
+    TEST_ASSERT_EQUAL(1, config_leave_settings_requested("true"));
+    TEST_ASSERT_EQUAL(1, config_leave_settings_requested("1"));
+    TEST_ASSERT_EQUAL(0, config_leave_settings_requested("false"));
+    TEST_ASSERT_EQUAL(0, config_leave_settings_requested("0"));
+    TEST_ASSERT_EQUAL(0, config_leave_settings_requested(NULL));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_cfgget);
@@ -149,5 +185,9 @@ int main(void) {
     RUN_TEST(test_validate_solenoid_hold_ms);
     RUN_TEST(test_validate_unknown_key);
     RUN_TEST(test_validate_not_a_number);
+    RUN_TEST(test_reject_field_accepts_valid);
+    RUN_TEST(test_reject_field_rejects_invalid);
+    RUN_TEST(test_reject_field_internal_never_rejected);
+    RUN_TEST(test_leave_settings_requested);
     return UNITY_END();
 }

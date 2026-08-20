@@ -22,19 +22,43 @@ def find_parasol_dirs():
     return dirs
 
 
+def assets_stale(parasol_dir, config_path):
+    """True when generated assets are missing or older than any source asset.
+
+    Assets bake in the parasol_config.json values (title, logo, favicon,
+    always_show_save) and the source index.html / app.min.js / pico CSS, so
+    changing any of them must regenerate the assets.
+    """
+    src_dir = os.path.join(parasol_dir, "src")
+    assets_h = os.path.join(src_dir, "prsl_assets.h")
+    assets_c = os.path.join(src_dir, "prsl_assets.c")
+    if not (os.path.exists(assets_h) and os.path.exists(assets_c)):
+        return True
+    sources = [
+        config_path,
+        os.path.join(parasol_dir, "index.html"),
+        os.path.join(parasol_dir, "app.min.js"),
+        os.path.join(parasol_dir, "pico.jade.min.css"),
+    ]
+    try:
+        assets_mtime = max(os.path.getmtime(assets_h), os.path.getmtime(assets_c))
+        return any(os.path.getmtime(s) > assets_mtime for s in sources)
+    except OSError:
+        return True
+
+
 def generate_assets(parasol_dir):
     """Generate prsl_assets.h and prsl_assets.c by invoking the existing CMake script."""
     src_dir = os.path.join(parasol_dir, "src")
     assets_h = os.path.join(src_dir, "prsl_assets.h")
     assets_c = os.path.join(src_dir, "prsl_assets.c")
 
-    if os.path.exists(assets_h) and os.path.exists(assets_c):
+    config_path = "lib/reduzent/parasol_config.json"
+    if not assets_stale(parasol_dir, config_path):
         return
 
-    cmake_script = os.path.join(parasol_dir, "cmake", "generate_assets.cmake")
-    config_path = "lib/reduzent/parasol_config.json"
-
     import subprocess
+    cmake_script = os.path.join(parasol_dir, "cmake", "generate_assets.cmake")
     out_dir = os.path.join(parasol_dir, "generated")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -162,11 +186,115 @@ def patch_prsl_cpp(parasol_dir):
         print(f"[parasol] prsl.cpp already patched")
 
 
+def patch_prsl_cpp_save_handler(parasol_dir):
+    """Fix the /api/settings/save body handler in prsl.cpp.
+
+    Upstream v0.6.3 has two bugs here:
+      1. cJSON_ParseWithLength((const char *)data, total) — ESPAsyncWebServer
+         delivers the body in chunks without accumulating (handleBody passes
+         one buffer per chunk), so multi-chunk bodies over-read and fail with
+         "Invalid JSON".
+      2. cJSON_GetObjectItem(msg, "data") — the browser posts the settings
+         object directly (no "data" wrapper), so single-chunk bodies fail with
+         "Missing data".
+
+    Replacement accumulates the body in request->_tempObject, acts on the
+    final chunk only, and applies the parsed object itself as the body.
+    """
+    path = os.path.join(parasol_dir, "src", "prsl.cpp")
+    with open(path, "r") as f:
+        content = f.read()
+
+    original = content
+
+    content = content.replace(
+        "#include <string.h>\n#include <stdio.h>",
+        "#include <string.h>\n#include <stdio.h>\n#include <stdlib.h>",
+    )
+
+    old = '''            cJSON *msg = cJSON_ParseWithLength((const char *)data, total);
+            if (!msg) {
+                req->send(400, "text/plain", "Invalid JSON");
+                return;
+            }
+            cJSON *body = cJSON_GetObjectItem(msg, "data");
+            if (!body) {
+                cJSON_Delete(msg);
+                req->send(400, "text/plain", "Missing data");
+                return;
+            }'''
+    new = '''            /* ESPAsyncWebServer delivers the body in chunks and does not
+               accumulate; handleBody passes one buffer per chunk. Build the
+               full body in _tempObject and act on the final chunk only. */
+            if (index == 0) {
+                free(req->_tempObject);
+                req->_tempObject = NULL;
+            }
+            if (total > 0 && len > 0) {
+                uint8_t *buf = (uint8_t *)realloc(req->_tempObject, index + len + 1);
+                if (!buf) {
+                    free(req->_tempObject);
+                    req->_tempObject = NULL;
+                    req->send(500, "text/plain", "Out of memory");
+                    return;
+                }
+                memcpy(buf + index, data, len);
+                buf[index + len] = '\\0';
+                req->_tempObject = buf;
+            }
+            if (index + len != total) return;  /* more chunks pending */
+
+            cJSON *msg = NULL;
+            if (total > 0) {
+                msg = cJSON_ParseWithLength((const char *)req->_tempObject, total);
+                free(req->_tempObject);
+                req->_tempObject = NULL;
+            }
+            if (!msg) {
+                req->send(400, "text/plain", "Invalid JSON");
+                return;
+            }
+            /* The browser posts the settings object directly (no "data" wrapper). */
+            cJSON *body = msg;'''
+    content = content.replace(old, new)
+
+    if content != original:
+        with open(path, "w") as f:
+            f.write(content)
+        print(f"[parasol] Patched {path} (save body handler: accumulate + no data wrapper)")
+    else:
+        print(f"[parasol] prsl.cpp save body handler already patched")
+
+
+def patch_app_js(parasol_dir):
+    """Show the Reset button only while dirty (client x(): a.hidden = !(c || h)).
+
+    Upstream v0.6.3 shows Reset whenever an on_reset callback exists, even on a
+    clean form. We want it to appear only when there are unsaved changes.
+    """
+    path = os.path.join(parasol_dir, "app.min.js")
+    with open(path, "r") as f:
+        content = f.read()
+
+    original = content
+    content = content.replace("a.hidden=!(c||h)", "a.hidden=!c")
+
+    if content != original:
+        with open(path, "w") as f:
+            f.write(content)
+        print(f"[parasol] Patched {path} (Reset button shows only when dirty)")
+    else:
+        print(f"[parasol] app.min.js already patched (or pattern not found)")
+
+
 # ── Main ─────────────────────────────────────────────────────────
 parasol_dirs = find_parasol_dirs()
 if parasol_dirs:
     for parasol_dir in parasol_dirs:
         print(f"[parasol] Processing {parasol_dir}")
+        # Patch app.min.js BEFORE generating assets: assets embed the JS.
+        patch_app_js(parasol_dir)
+        patch_prsl_cpp_save_handler(parasol_dir)
         generate_assets(parasol_dir)
         patch_prsl_store_h(parasol_dir)
         patch_prsl_h(parasol_dir)

@@ -51,6 +51,22 @@ static inline int config_validate_field(const char* key, const char* value) {
     return -1;  // unknown key
 }
 
+// Validate a parasol on_set value for a registered field key. Returns -1 to
+// reject the change, 0 to accept. Internal/system fields (underscore-prefixed
+// keys, e.g. the "leave settings" switch) are never rejected here. A NULL
+// value (cleared/indeterminate field) is treated as an empty string.
+static inline int config_reject_field(const char* key, const char* value) {
+    if (!value) value = "";
+    if (key && key[0] == '_') return 0;
+    return config_validate_field(key, value) != 0 ? -1 : 0;
+}
+
+// True when a stored "leave settings mode" switch value (parasol boolean
+// string "true"/"false") requests exiting settings mode.
+static inline int config_leave_settings_requested(const char* value) {
+    return value && (strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+}
+
 // Handle one serial line. If `line` is a cfg* command, apply its effect to
 // `cfg` and write the response (key=value lines or an error) into `out`,
 // returning the action. Non-cfg lines return CFG_NONE and touch nothing.
