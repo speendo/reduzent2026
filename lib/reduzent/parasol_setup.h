@@ -72,14 +72,6 @@ static inline void parasol_register_controller_fields(void) {
       prsl_add_field(PRSL_NUMBER, "network", "settings_window_sec", "Settings Window (s)", &o); }
 }
 
-// ── Validation helper ────────────────────────────────────────────
-// Validate a single key via config_validate_field, returning ESP_OK or ESP_ERR_INVALID_ARG.
-static inline esp_err_t parasol_validate_field(const char *group_id, const char *key,
-                                               const char *value) {
-    if (!group_id || !key || !value) return ESP_ERR_INVALID_ARG;
-    return config_validate_field(key, value) == 0 ? ESP_OK : ESP_ERR_INVALID_ARG;
-}
-
 // ── NVS save callback (leaf) ─────────────────────────────────────
 // Reads parasol field values, validates, writes to config struct, persists.
 static inline esp_err_t parasol_save_leaf_to_nvs(void) {
