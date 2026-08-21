@@ -19,8 +19,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from reduzent_shared import (
-    DEFAULT_CONFIG,
-    find_config,
     load_settings,
     update_settings,
     menu_choice,
@@ -28,6 +26,7 @@ from reduzent_shared import (
     open_connections,
     raw_terminal,
     reset_scroll_region,
+    resolve_config,
     resolve_settings,
     save_settings,
     select_ports,
@@ -621,6 +620,62 @@ def hotkey_action(hotkeys, msg_type, channel, note, velocity):
 _PANEL_LABEL_MAX = 8  # keep in sync with _clean_name
 
 
+_ESC_SEQ = re.compile("\x1b\\[[0-9;]*[A-Za-z]|\x1b\\][^\x07]*\x07")
+
+
+def _visible_len(text):
+    """On-screen width of `text`: ANSI sequences are zero-width."""
+    width = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "\x1b":
+            m = _ESC_SEQ.match(text, i)
+            i = m.end() if m else i + 1
+            continue
+        width += 1
+        i += 1
+    return width
+
+
+def _truncate_visible(text, max_width):
+    """Truncate `text` to at most `max_width` on-screen columns.
+
+    ANSI escape sequences cost zero columns and pass through untouched, so the
+    result stays valid terminal output (never cut mid-sequence). Unchanged when
+    the text already fits; empty when *max_width* is negative.
+    """
+    if max_width <= 0:
+        return ""
+    out = []
+    width = 0
+    i = 0
+    n = len(text)
+    truncated = False
+    had_esc = False
+    while i < n:
+        if text[i] == "\x1b":
+            m = _ESC_SEQ.match(text, i)
+            if m:
+                out.append(m.group(0))
+                had_esc = True
+                i = m.end()
+                continue
+            out.append(text[i])
+            i += 1
+            continue
+        width += 1
+        if width > max_width:
+            truncated = True
+            break
+        out.append(text[i])
+        i += 1
+    result = "".join(out)
+    if truncated and had_esc and not result.endswith("\x1b[0m"):
+        result += "\x1b[0m"
+    return result
+
+
 def column_lines(present, loop, selected, names, max_rows, blink_on):
     """Render the right-side channel column, one string per terminal row.
 
@@ -659,12 +714,13 @@ class _noop_ctx:
 
 def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
                  override_inst, last_program, recording=False, rec_elapsed=None,
-                 selected=None, sel_name=None):
+                 selected=None, sel_name=None, width=None):
     """Return the two status-bar lines (the looper's two-line status bar).
 
     While `recording` is true, line 1 is prefixed with a blinking red
     "● REC" label (0.5 s half-period, derived from `rec_elapsed`) and a
-    steady M:SS clock of the take's elapsed time.
+    steady M:SS clock of the take's elapsed time. When `width` is given both
+    lines are truncated to that many on-screen columns so they never wrap.
     """
     name_disp = loop_name if loop_name is not None else "no loop"
     length_disp = f"{loop.length:.2f}s" if loop.length > 0 else "0.00s"
@@ -709,18 +765,34 @@ def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
         f"+/- rate  \u232b rate1  0-9 ch  tab/\u2190\u2192 nav  "
         f"c ch  i inst  m menu  s settings  q quit\033[0m"
     )
+    if width is not None:
+        line1 = _truncate_visible(line1, width)
+        line2 = _truncate_visible(line2, width)
     return line1, line2
 
 
 _PANEL_WIDTH = 12  # reserved right margin for the channel column
 
 
-def draw_column(present, loop, selected, names, lock=None):
+def panel_height(rows, n_channels):
+    """Rows reserved at the top for the channel column.
+
+    At least one console line stays visible below the column; the status bar
+    takes the bottom two. Overflow beyond the reserved band is reported as
+    "+n more" by the column renderer.
+    """
+    return min(n_channels, max(1, rows - 6))
+
+
+def draw_column(present, loop, selected, names, lock=None, max_rows=None):
     """Repaint the right-side channel column; skips on narrow terminals."""
-    rows, cols = os.get_terminal_size()
+    size = os.get_terminal_size()
+    rows, cols = size.lines, size.columns
     if cols < 50 or not present:
         return
-    lines = column_lines(present, loop, selected, names, rows - 3,
+    if max_rows is None:
+        max_rows = rows - 3
+    lines = column_lines(present, loop, selected, names, max_rows,
                          blink_on=int(time.monotonic() * 2) % 2 == 0)
     ctx = lock if lock else _noop_ctx()
     with ctx:
@@ -736,12 +808,14 @@ def draw_status(port, baud, loop_name, engine, override_ch, last_channel,
                 override_inst, last_program, lock=None,
                 selected=None, sel_name=None):
     """Redraw the two-line status bar at the terminal bottom."""
-    rows = os.get_terminal_size().lines
+    size = os.get_terminal_size()
+    rows = size.lines
     line1, line2 = status_lines(port, baud, loop_name, engine.loop, engine.rate,
                                 override_ch, last_channel, override_inst, last_program,
                                 recording=engine.recording,
                                 rec_elapsed=engine.take_elapsed(time.monotonic()),
-                                selected=selected, sel_name=sel_name)
+                                selected=selected, sel_name=sel_name,
+                                width=size.columns)
     ctx = lock if lock else _noop_ctx()
     with ctx:
         sys.stdout.write("\033[s")  # save cursor
@@ -757,14 +831,10 @@ def main() -> None:
     import mido
 
     argv = sys.argv[1:]
-    config = DEFAULT_CONFIG
     quiet = "--quiet" in argv
-    for i, a in enumerate(argv):
-        if a == "--config" and i + 1 < len(argv):
-            config = argv[i + 1]
     # Resolve once: --config flag > project config/ > user config dir.
     # All later loads AND saves go to this same file.
-    config = find_config(config)
+    config = resolve_config(argv)
 
     def detected():
         return (
@@ -833,9 +903,9 @@ def main() -> None:
                     pass
 
     def say(text, color=""):
-        """Console line, truncated so it never runs under the channel column."""
+        """Console line in the output band; truncated so it never wraps."""
         cols = os.get_terminal_size().columns
-        cut = text[:max(cols - _PANEL_WIDTH - 1, 20)]
+        cut = text[:max(cols - 1, 20)]
         if color:
             cut = f"{color}{cut}\033[0m"
         with stdout_lock:
@@ -852,7 +922,9 @@ def main() -> None:
                     last_channel, override_inst, last_program, stdout_lock,
                     selected=selected, sel_name=nav_channels.get(selected)
                     if nav_channels else None)
-        draw_column(present_now, engine.loop, selected, nav_channels, stdout_lock)
+        rows_now = os.get_terminal_size().lines
+        draw_column(present_now, engine.loop, selected, nav_channels, stdout_lock,
+                    max_rows=panel_height(rows_now, len(present_now)) + 1)
 
     def on_message(msg):
         nonlocal last_channel, last_program, selected
@@ -869,6 +941,9 @@ def main() -> None:
             if act == "cycle":
                 with lock:  # snapshot tracks before stepping (see redraw)
                     present_now = present_channels(nav_channels, engine.loop)
+                if not present_now:
+                    say("no channels to navigate")
+                    return
                 new = step_channel(selected, present_now, 1)
                 if new is not None:
                     selected = new
@@ -930,16 +1005,25 @@ def main() -> None:
         serial_buf = ""
         sys.stdout.write("\033[2J\033[1;1H")
         sys.stdout.flush()
-        setup_scroll_region(2)
+        # The channel column owns the top rows; console output scrolls below
+        # it, and the status bar owns the bottom two. Fixed at boot from the
+        # config channel list, so output can never scroll over the panel.
+        boot_rows = os.get_terminal_size().lines
+        boot_panel_h = panel_height(boot_rows, len(present))
+        setup_scroll_region(2, top=2 + boot_panel_h)
         # Config warnings go here (not earlier) so the screen clear below
         # doesn't wipe them before they're seen.
         for w in nav_warns + hk_warns:
             print(f"warning: {w}")
+        # Console output (say()) starts at the top of its own scroll band.
+        sys.stdout.write(f"\033[{2 + boot_panel_h};1H")
+        sys.stdout.flush()
         draw_status(port, baud, loop_name, engine, override_ch,
                     last_channel, override_inst, last_program, stdout_lock,
                     selected=selected, sel_name=nav_channels.get(selected)
                     if nav_channels else None)
-        draw_column(present, engine.loop, selected, nav_channels, stdout_lock)
+        draw_column(present, engine.loop, selected, nav_channels, stdout_lock,
+                    max_rows=panel_height(boot_rows, len(present)) + 1)
         stop_event = threading.Event()
         sched_thread = threading.Thread(target=scheduler, args=(stop_event,), daemon=True)
         sched_thread.start()
@@ -978,7 +1062,7 @@ def main() -> None:
                         write_error = False
                         say(f"reconnected to {port}")
 
-                if not select.select([sys.stdin], [], [], 0.1)[0]:
+                if not select.select([fd], [], [], 0.1)[0]:
                     now = time.monotonic()
                     # Live clock + blink while recording or navigating; lazy otherwise.
                     interval = 0.15 if (engine.recording or selected is not None) else 2.0
@@ -986,7 +1070,11 @@ def main() -> None:
                         redraw()
                         last_redraw = now
                     continue
-                ch = sys.stdin.read(1)
+                # os.read (not sys.stdin.read): the TextIO wrapper would buffer
+                # the trailing bytes of a 3-byte arrow sequence and select()
+                # would never see them, so arrows would break. menu_choice uses
+                # the same approach.
+                ch = os.read(fd, 1).decode("utf-8", "replace")
                 if ch in ("\x03", "q", "Q"):
                     if engine.recording:
                         say("finish or cancel the take first (space/d)")
@@ -997,23 +1085,28 @@ def main() -> None:
                     selected = int(ch)  # jump; d/x no-op if nothing is there
                     redraw()
                 if ch == "\t":
-                    new = step_channel(selected,
-                                       present_channels(nav_channels, engine.loop), 1)
-                    if new is not None:
-                        selected = new
-                        redraw()
+                    present_now = present_channels(nav_channels, engine.loop)
+                    if not present_now:
+                        say("no channels to navigate")
+                    else:
+                        new = step_channel(selected, present_now, 1)
+                        if new is not None:
+                            selected = new
+                            redraw()
                 if ch == "\x1b":
                     # Arrow keys arrive as ESC [ D / ESC [ C; drain the rest.
-                    if select.select([sys.stdin], [], [], 0.01)[0]:
-                        seq = sys.stdin.read(2)
+                    if select.select([fd], [], [], 0.01)[0]:
+                        seq = os.read(fd, 2).decode("utf-8", "replace")
                         if seq in ("[D", "[C"):
                             delta = -1 if seq == "[D" else 1
-                            new = step_channel(
-                                selected,
-                                present_channels(nav_channels, engine.loop), delta)
-                            if new is not None:
-                                selected = new
-                                redraw()
+                            present_now = present_channels(nav_channels, engine.loop)
+                            if not present_now:
+                                say("no channels to navigate")
+                            else:
+                                new = step_channel(selected, present_now, delta)
+                                if new is not None:
+                                    selected = new
+                                    redraw()
                 if ch == " ":
                     with lock:
                         live = engine.toggle(time.monotonic())
@@ -1021,22 +1114,42 @@ def main() -> None:
                         emit(c)
                     redraw()
                 if ch in ("d", "D"):
+                    target = edit_target(selected, override_ch, last_channel)
                     with lock:
                         if engine.recording:
                             engine.cancel()
                             live = []
+                            miss = None
+                        elif target is None:
+                            live = []
+                            miss = None
+                        elif target in engine.loop.tracks:
+                            live = engine.delete_track(target)
+                            miss = None
                         else:
-                            target = edit_target(selected, override_ch, last_channel)
-                            live = engine.delete_track(target) if target is not None else []
+                            live = []
+                            miss = target
                     for c in live:
                         emit(c)
+                    if miss is not None:
+                        say(f"nothing on ch {miss}")
                     redraw()
                 if ch in ("x", "X"):
+                    target = edit_target(selected, override_ch, last_channel)
                     with lock:
-                        target = edit_target(selected, override_ch, last_channel)
-                        live = engine.toggle_mute(target) if target is not None else []
+                        if target is None:
+                            live = []
+                            miss = None
+                        elif target in engine.loop.tracks:
+                            live = engine.toggle_mute(target)
+                            miss = None
+                        else:
+                            live = []
+                            miss = target
                     for c in live:
                         emit(c)
+                    if miss is not None:
+                        say(f"nothing on ch {miss}")
                     redraw()
                 if ch in ("p", "P"):
                     with lock:

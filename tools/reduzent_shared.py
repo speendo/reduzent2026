@@ -208,10 +208,14 @@ def open_connections(midi_name, port, baud):
     return mido.open_input(midi_name), serial.Serial(port, baud, timeout=0)
 
 
-def setup_scroll_region(bottom: int) -> None:
-    """Reserve `bottom` lines at the terminal bottom for the status bar."""
+def setup_scroll_region(bottom: int, top: int = 1) -> None:
+    """Restrict scrolling to rows `top`..`rows-bottom` (1-based, inclusive).
+
+    The lines above *top* stay fixed (used by the looper's channel column)
+    and the *bottom* lines are reserved for the status bar.
+    """
     rows = os.get_terminal_size().lines
-    sys.stdout.write(f"\033[1;{rows - bottom}r")
+    sys.stdout.write(f"\033[{top};{rows - bottom}r")
     sys.stdout.flush()
 
 

@@ -28,6 +28,8 @@ from looper import (
     save_loop_named,
     load_loop_named,
     status_lines,
+    _visible_len,
+    _truncate_visible,
     parse_channels,
     parse_hotkeys,
     present_channels,
@@ -926,6 +928,61 @@ class TestStatusLines(unittest.TestCase):
                                 None, None, None, None,
                                 recording=True, rec_elapsed=5.9)
         self.assertIn("0:05", self._plain(line1))
+
+
+class TestTruncateVisible(unittest.TestCase):
+    def test_short_text_unchanged(self):
+        self.assertEqual(_truncate_visible("hello", 10), "hello")
+        self.assertEqual(_visible_len("hello"), 5)
+
+    def test_plain_truncation(self):
+        self.assertEqual(_truncate_visible("hello", 3), "hel")
+
+    def test_wide_unicode_counts_one_column(self):
+        self.assertEqual(_visible_len("→"), 1)
+        self.assertEqual(_truncate_visible("a→b", 2), "a→")
+
+    def test_ansi_sequences_zero_width_and_preserved(self):
+        text = "\033[1;31mREC\033[0m"
+        self.assertEqual(_visible_len(text), 3)
+        self.assertEqual(_truncate_visible(text, 2), "\033[1;31mRE\033[0m")
+
+    def test_width_zero_and_negative(self):
+        self.assertEqual(_truncate_visible("abc", 0), "")
+        self.assertEqual(_truncate_visible("abc", -1), "")
+
+    def test_cut_inside_escape_keeps_sequence_intact(self):
+        text = "\033[1;33msel\033[0m rest"
+        # The final reset is added back when the cut happens inside attributes.
+        self.assertEqual(_truncate_visible(text, 4), "\033[1;33msel\033[0m \033[0m")
+        self.assertEqual(_truncate_visible(text, 5), "\033[1;33msel\033[0m r\033[0m")
+
+
+class TestStatusLineWidth(unittest.TestCase):
+    @staticmethod
+    def _plain(text):
+        return _ANSI_RE.sub("", text)
+
+    def test_width_truncates_both_lines(self):
+        loop = Loop(length=1.0)
+        line1, line2 = status_lines("/dev/ttyS0", 115200, None, loop, 1.0,
+                                    None, None, None, None,
+                                    selected=0, sel_name="Drums", width=40)
+        for line in (line1, line2):
+            self.assertLessEqual(len(self._plain(line)), 40)
+
+    def test_no_width_leaves_full_help(self):
+        line1, line2 = status_lines("/dev/ttyS0", 115200, None, Loop(), 1.0,
+                                    None, None, None, None, selected=0,
+                                    sel_name="Drums")
+        self.assertIn("q quit", self._plain(line2))  # tail of help survives
+
+    def test_selection_prefix_survives_truncation(self):
+        line1, line2 = status_lines("/dev/ttyS0", 115200, None, Loop(), 1.0,
+                                    None, None, None, None, selected=3,
+                                    sel_name="Piezo L", width=30)
+        plain = self._plain(line2)
+        self.assertIn("sel: Piezo L", plain)
 
 
 class TestParseChannels(unittest.TestCase):
