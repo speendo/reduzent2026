@@ -37,8 +37,6 @@ import tty
 from typing import Optional
 
 from reduzent_shared import (
-    DEFAULT_CONFIG,
-    find_config,
     load_settings,
     update_settings,
     menu_choice,
@@ -46,6 +44,7 @@ from reduzent_shared import (
     open_connections,
     raw_terminal,
     reset_scroll_region,
+    resolve_config,
     resolve_settings,
     save_settings,
     select_ports,
@@ -107,14 +106,10 @@ def main() -> None:
     import mido
 
     argv = sys.argv[1:]
-    config = DEFAULT_CONFIG
     quiet = "--quiet" in argv
-    for i, a in enumerate(argv):
-        if a == "--config" and i + 1 < len(argv):
-            config = argv[i + 1]
     # Resolve once: --config flag > project config/ > user config dir.
     # All later loads AND saves go to this same file.
-    config = find_config(config)
+    config = resolve_config(argv)
 
     def detected():
         return (

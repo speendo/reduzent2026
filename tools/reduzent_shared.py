@@ -48,6 +48,20 @@ def find_config(explicit=None):
     return DEFAULT_CONFIG
 
 
+def resolve_config(argv):
+    """Resolve the settings file from CLI argv.
+
+    `--config PATH` wins; otherwise the layered lookup runs (tools/config/
+    first, then the user config dir). Passing DEFAULT_CONFIG straight to
+    find_config would read it as an explicit path and skip the layered
+    lookup, so the default is never treated as a user choice here.
+    """
+    for i, a in enumerate(argv):
+        if a == "--config" and i + 1 < len(argv):
+            return find_config(argv[i + 1])
+    return find_config()
+
+
 def midi_to_command(msg) -> Optional[str]:
     """Translate one mido message into a reduzent text command, or None.
 

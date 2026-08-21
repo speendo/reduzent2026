@@ -71,8 +71,8 @@ class TestRawTerminal(unittest.TestCase):
             _close_pair(master, slave)
 
 
-class TestFindConfig(unittest.TestCase):
-    """Priority: --config flag > tools/config/ > user config dir."""
+class _ConfigLayout(unittest.TestCase):
+    """Fake layout: a project config dir and a user config dir."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -99,6 +99,10 @@ class TestFindConfig(unittest.TestCase):
         with open(path, "w") as f:
             json.dump({"who": marker}, f)
 
+
+class TestFindConfig(_ConfigLayout):
+    """Priority: --config flag > tools/config/ > user config dir."""
+
     def test_explicit_flag_wins_even_if_missing(self):
         explicit = os.path.join(self.tmp.name, "explicit.json")
         self._write(self.proj_cfg, "proj")
@@ -116,6 +120,27 @@ class TestFindConfig(unittest.TestCase):
 
     def test_new_file_created_in_user_dir(self):
         self.assertEqual(find_config(), self.user_cfg)
+
+
+class TestResolveConfig(_ConfigLayout):
+    """resolve_config(argv): --config flag wins, else the layered lookup."""
+
+    def test_no_flag_runs_layered_lookup_not_default(self):
+        self._write(self.proj_cfg, "proj")
+        # Regression: main() used to hand DEFAULT_CONFIG to find_config(),
+        # which short-circuited straight to the user dir and never saw
+        # tools/config/. resolve_config must run the layered lookup instead.
+        self.assertEqual(rs.resolve_config([]), self.proj_cfg)
+        self.assertEqual(rs.resolve_config(["--quiet"]), self.proj_cfg)
+
+    def test_config_flag_wins(self):
+        explicit = os.path.join(self.tmp.name, "explicit.json")
+        self._write(self.proj_cfg, "proj")
+        self.assertEqual(rs.resolve_config(["--config", explicit]), explicit)
+
+    def test_bare_config_flag_falls_back_to_lookup(self):
+        self._write(self.proj_cfg, "proj")
+        self.assertEqual(rs.resolve_config(["--config"]), self.proj_cfg)
 
 
 class TestUpdateSettings(unittest.TestCase):
