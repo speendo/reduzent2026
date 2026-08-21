@@ -710,6 +710,26 @@ def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
     return line1, line2
 
 
+_PANEL_WIDTH = 12  # reserved right margin for the channel column
+
+
+def draw_column(present, loop, selected, names, lock=None):
+    """Repaint the right-side channel column; skips on narrow terminals."""
+    rows, cols = os.get_terminal_size()
+    if cols < 50 or not present:
+        return
+    lines = column_lines(present, loop, selected, names, rows - 3,
+                         blink_on=int(time.monotonic() * 2) % 2 == 0)
+    ctx = lock if lock else _noop_ctx()
+    with ctx:
+        sys.stdout.write("\033[s")
+        for i, line in enumerate(lines):
+            # Column hugs the right edge; 2K clears stale wider lines.
+            sys.stdout.write(f"\033[{2 + i};{cols - _PANEL_WIDTH + 1}H\033[2K{line}")
+        sys.stdout.write("\033[u")
+        sys.stdout.flush()
+
+
 def draw_status(port, baud, loop_name, engine, override_ch, last_channel,
                 override_inst, last_program, lock=None,
                 selected=None, sel_name=None):
