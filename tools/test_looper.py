@@ -28,6 +28,8 @@ from looper import (
     save_loop_named,
     load_loop_named,
     status_lines,
+    parse_channels,
+    parse_hotkeys,
 )
 
 
@@ -919,6 +921,63 @@ class TestStatusLines(unittest.TestCase):
                                 None, None, None, None,
                                 recording=True, rec_elapsed=5.9)
         self.assertIn("0:05", self._plain(line1))
+
+
+class TestParseChannels(unittest.TestCase):
+    def test_absent_key_returns_none(self):
+        chans, warns = parse_channels({})
+        self.assertIsNone(chans)
+        self.assertEqual(warns, [])
+
+    def test_valid_map(self):
+        chans, warns = parse_channels({"channels": {"0": "kick", "5": "bass"}})
+        self.assertEqual(chans, {0: "kick", 5: "bass"})
+        self.assertEqual(warns, [])
+
+    def test_invalid_entries_dropped_with_warning(self):
+        chans, warns = parse_channels(
+            {"channels": {"0": "kick", "99": "bad", "x": "bad", "2": ""}}
+        )
+        self.assertEqual(chans, {0: "kick"})
+        self.assertEqual(len(warns), 3)
+
+    def test_all_invalid_returns_none(self):
+        chans, warns = parse_channels({"channels": {"99": "bad"}})
+        self.assertIsNone(chans)
+        self.assertEqual(len(warns), 1)
+
+    def test_name_sanitized_single_line_truncated(self):
+        chans, _ = parse_channels({"channels": {"1": "a\nb\r  cdefghij"}})
+        self.assertEqual(chans, {1: "a b cdef"})
+
+
+class TestParseHotkeys(unittest.TestCase):
+    def test_absent_key_returns_empty(self):
+        hk, warns = parse_hotkeys({})
+        self.assertEqual(hk, {})
+        self.assertEqual(warns, [])
+
+    def test_valid_hotkeys(self):
+        hk, warns = parse_hotkeys(
+            {"midi_hotkeys": {
+                "record": {"channel": 15, "note": 60},
+                "cycle": {"channel": 15, "note": 62},
+            }}
+        )
+        self.assertEqual(hk, {"record": (15, 60), "cycle": (15, 62)})
+        self.assertEqual(warns, [])
+
+    def test_bad_entries_dropped_with_warning(self):
+        hk, warns = parse_hotkeys(
+            {"midi_hotkeys": {
+                "record": {"channel": 15, "note": 60},
+                "explode": {"channel": 0, "note": 1},   # unknown action
+                "cycle": {"channel": 16, "note": 62},   # channel out of range
+                "record2": None,
+            }}
+        )
+        self.assertEqual(hk, {"record": (15, 60)})
+        self.assertEqual(len(warns), 3)
 
 
 if __name__ == "__main__":

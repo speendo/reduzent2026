@@ -514,6 +514,66 @@ def load_loop_named(base: str, name: str) -> Loop:
     return load_loop(loop_path(base, name))
 
 
+_CHANNEL_ACTIONS = ("record", "cycle")
+
+
+def _clean_name(name) -> str:
+    """Collapse a config channel name to one short printable line (max 8)."""
+    text = "".join(c if c.isprintable() else " " for c in str(name))
+    return " ".join(text.split())[:8]
+
+
+def parse_channels(settings):
+    """Extract the "channels" map from settings.
+
+    Returns (map|None, warnings): None when the key is absent or every entry
+    is invalid; invalid entries are dropped with one warning each.
+    """
+    raw = settings.get("channels")
+    if not isinstance(raw, dict) or not raw:
+        return None, []
+    chans, warns = {}, []
+    for key, name in raw.items():
+        try:
+            ch = int(key)
+            assert 0 <= ch <= 15 and isinstance(name, str)
+        except (ValueError, AssertionError, TypeError):
+            warns.append(f"ignoring bad channel entry: {key!r}")
+            continue
+        clean = _clean_name(name)
+        if clean:
+            chans[ch] = clean
+        else:
+            warns.append(f"ignoring channel {ch}: empty name")
+    return (chans or None), warns
+
+
+def parse_hotkeys(settings):
+    """Extract the "midi_hotkeys" map from settings.
+
+    Returns (action->(channel, note), warnings); {} when absent. Bad entries
+    are dropped with one warning each.
+    """
+    raw = settings.get("midi_hotkeys")
+    if not isinstance(raw, dict):
+        return {}, []
+    hk, warns = {}, []
+    for action, spec in raw.items():
+        pair = None
+        if action in _CHANNEL_ACTIONS and isinstance(spec, dict):
+            try:
+                ch, note = int(spec["channel"]), int(spec["note"])
+                assert 0 <= ch <= 15 and 0 <= note <= 127
+                pair = (ch, note)
+            except (KeyError, ValueError, AssertionError, TypeError):
+                pair = None
+        if pair is None:
+            warns.append(f"ignoring bad midi hotkey: {action!r}")
+        else:
+            hk[action] = pair
+    return hk, warns
+
+
 _PROGRAM_NAMES = {0: "1-bit", 1: "arp", 2: "mono"}
 
 
