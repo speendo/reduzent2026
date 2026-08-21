@@ -19,7 +19,7 @@ import unittest
 import unittest.mock
 
 import reduzent_shared as rs
-from reduzent_shared import find_config, raw_terminal
+from reduzent_shared import find_config, raw_terminal, update_settings
 
 
 def _close_pair(master, slave):
@@ -116,6 +116,25 @@ class TestFindConfig(unittest.TestCase):
 
     def test_new_file_created_in_user_dir(self):
         self.assertEqual(find_config(), self.user_cfg)
+
+
+class TestUpdateSettings(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "cfg.json")
+
+    def test_merge_preserves_unrelated_keys(self):
+        rs.save_settings(self.path, {"channels": {"0": "Drums"}, "baud": 1})
+        update_settings(self.path, {"baud": 2, "serial_port": "/dev/x"})
+        got = rs.load_settings(self.path)
+        self.assertEqual(got["channels"], {"0": "Drums"})  # not clobbered
+        self.assertEqual(got["baud"], 2)
+        self.assertEqual(got["serial_port"], "/dev/x")
+
+    def test_missing_file_behaves_like_save(self):
+        update_settings(self.path, {"midi_input": "m"})
+        self.assertEqual(rs.load_settings(self.path), {"midi_input": "m"})
 
 
 if __name__ == "__main__":

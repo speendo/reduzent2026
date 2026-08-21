@@ -97,6 +97,17 @@ def save_settings(path: str, settings: Dict[str, Any]) -> None:
         json.dump(settings, f, indent=2)
 
 
+def update_settings(path: str, values: Dict[str, Any]) -> None:
+    """Merge `values` into the settings file at `path`, keeping other keys.
+
+    Unlike save_settings this never drops keys it wasn't told about — port
+    picks must not wipe channel names or hotkeys.
+    """
+    settings = load_settings(path)
+    settings.update(values)
+    save_settings(path, settings)
+
+
 def resolve_settings(settings, midi_names, serial_names):
     """Return (midi_name, serial_port, baud) from saved settings.
 

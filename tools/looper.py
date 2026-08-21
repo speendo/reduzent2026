@@ -22,6 +22,7 @@ from reduzent_shared import (
     DEFAULT_CONFIG,
     find_config,
     load_settings,
+    update_settings,
     menu_choice,
     midi_to_command,
     open_connections,
@@ -789,7 +790,8 @@ def main() -> None:
     if midi_name is None or port is None:
         raise SystemExit("no MIDI input or serial port detected")
     inport, ser = open_connections(midi_name, port, baud)
-    save_settings(config, {"midi_input": midi_name, "serial_port": port, "baud": baud})
+    update_settings(config, {"midi_input": midi_name, "serial_port": port,
+                             "baud": baud})
 
     # One shared lock guards the serial handle AND the engine: the MIDI callback
     # (record + live forward), the scheduler thread (playback), and the hotkey
@@ -1134,7 +1136,7 @@ def main() -> None:
                                 with lock:
                                     state["ser"] = ser
                                 midi_name, port, baud = new_midi, new_port, new_baud
-                                save_settings(config, {
+                                update_settings(config, {
                                     "midi_input": midi_name,
                                     "serial_port": port,
                                     "baud": baud,
