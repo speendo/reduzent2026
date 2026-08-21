@@ -1,0 +1,18 @@
+{
+  "channels": {
+    "0": "Drums",
+    "1": "Piezo S",
+    "2": "Piezo M",
+    "3": "Piezo L"
+  },
+  "midi_hotkeys": {
+    "record": {
+      "channel": 9,
+      "note": 46
+    },
+    "cycle": {
+      "channel": 9,
+      "note": 49
+    }
+  }
+}
