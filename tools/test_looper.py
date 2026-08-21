@@ -865,20 +865,19 @@ class TestStatusLines(unittest.TestCase):
         loop.tracks[0] = Track()
         loop.tracks[3] = Track()
         line1, line2 = status_lines("p", 9600, "jam1", loop, 2.0,
-                                    5, 2, None, 0)
+                                    2, None, 0, selected=5)
         line1, line2 = self._plain(line1), self._plain(line2)
         self.assertIn("jam1", line1)
         self.assertIn("4.00s", line1)
         self.assertIn("trk: 2", line1)
         self.assertIn("rate: x2.00", line1)
-        self.assertIn("ch: 5", line2)
-        self.assertIn("(override)", line2)
+        self.assertIn("sel: 5", line2)  # selection is the active channel
         self.assertIn("inst: 1-bit", line2)
 
     def test_override_inst_and_midi_channel(self):
         loop = Loop()
         line1, line2 = status_lines("p", 9600, None, loop, 1.0,
-                                    None, 3, 7, None)
+                                    3, 7, None)
         line1, line2 = self._plain(line1), self._plain(line2)
         self.assertIn("ch: 3", line2)
         self.assertIn("(MIDI)", line2)
@@ -886,7 +885,7 @@ class TestStatusLines(unittest.TestCase):
 
     def test_recording_shows_indicator_and_clock(self):
         line1, _ = status_lines("p", 9600, None, Loop(), 1.0,
-                                None, None, None, None,
+                                None, None, None,
                                 recording=True, rec_elapsed=65.0)
         plain = self._plain(line1)
         self.assertIn("\u25cf REC", plain)
@@ -899,7 +898,7 @@ class TestStatusLines(unittest.TestCase):
 
     def test_rec_blink_visible_phase(self):
         line1, _ = status_lines("p", 9600, None, Loop(), 1.0,
-                                None, None, None, None,
+                                None, None, None,
                                 recording=True, rec_elapsed=0.2)
         plain = self._plain(line1)
         self.assertIn("\u25cf REC", plain)
@@ -907,7 +906,7 @@ class TestStatusLines(unittest.TestCase):
 
     def test_rec_blink_hidden_phase(self):
         line1, _ = status_lines("p", 9600, None, Loop(), 1.0,
-                                None, None, None, None,
+                                None, None, None,
                                 recording=True, rec_elapsed=0.7)
         plain = self._plain(line1)
         self.assertNotIn("\u25cf REC", plain)
@@ -915,17 +914,17 @@ class TestStatusLines(unittest.TestCase):
 
     def test_rec_blink_keeps_line_width(self):
         on, _ = status_lines("p", 9600, None, Loop(), 1.0,
-                             None, None, None, None,
+                             None, None, None,
                              recording=True, rec_elapsed=0.2)
         off, _ = status_lines("p", 9600, None, Loop(), 1.0,
-                              None, None, None, None,
+                              None, None, None,
                               recording=True, rec_elapsed=0.7)
         # Hidden phase reserves the label's columns so the line never jumps.
         self.assertEqual(len(self._plain(on)), len(self._plain(off)))
 
     def test_rec_clock_truncates_subsecond(self):
         line1, _ = status_lines("p", 9600, None, Loop(), 1.0,
-                                None, None, None, None,
+                                None, None, None,
                                 recording=True, rec_elapsed=5.9)
         self.assertIn("0:05", self._plain(line1))
 
@@ -966,7 +965,7 @@ class TestStatusLineWidth(unittest.TestCase):
     def test_width_truncates_both_lines(self):
         loop = Loop(length=1.0)
         line1, line2 = status_lines("/dev/ttyS0", 115200, None, loop, 1.0,
-                                    None, None, None, None,
+                                    None, None, None,
                                     selected=0, sel_name="Drums", width=40)
         for line in (line1, line2):
             self.assertLessEqual(len(self._plain(line)), 40)
@@ -1077,10 +1076,10 @@ class TestStepChannel(unittest.TestCase):
 
 class TestEditTarget(unittest.TestCase):
     def test_precedence(self):
-        self.assertEqual(edit_target(2, 5, 9), 2)
-        self.assertEqual(edit_target(None, 5, 9), 5)
-        self.assertEqual(edit_target(None, None, 9), 9)
-        self.assertIsNone(edit_target(None, None, None))
+        """Selection (the active channel) wins, else the last MIDI channel."""
+        self.assertEqual(edit_target(2, 9), 2)
+        self.assertEqual(edit_target(None, 9), 9)
+        self.assertIsNone(edit_target(None, None))
 
 
 class TestHotkeyAction(unittest.TestCase):
@@ -1155,7 +1154,6 @@ class TestStatusLineSelection(unittest.TestCase):
         # Defaults go in as keywords so callers may override any of them
         # (duplicate positional binding would raise TypeError); lines come
         # back ANSI-stripped like TestStatusLines._plain.
-        kw.setdefault("override_ch", None)
         kw.setdefault("last_channel", None)
         kw.setdefault("override_inst", None)
         kw.setdefault("last_program", None)
@@ -1167,10 +1165,12 @@ class TestStatusLineSelection(unittest.TestCase):
         _, line2 = self.base(last_channel=3)
         self.assertIn("ch: 3 (MIDI)", line2)
 
-    def test_selection_shows_name_and_override_tag(self):
-        _, line2 = self.base(selected=1, sel_name="snare", override_ch=1)
-        self.assertIn("sel: snare (ovr)", line2)
-        self.assertNotIn("(override)", line2)
+    def test_selection_shows_name(self):
+        # The selection is the active channel; no separate override tag.
+        _, line2 = self.base(selected=1, sel_name="snare")
+        self.assertIn("sel: snare", line2)
+        self.assertNotIn("ovr", line2)
+        self.assertNotIn("override", line2)
 
     def test_selection_without_name_shows_number(self):
         _, line2 = self.base(selected=7)

@@ -592,12 +592,12 @@ def step_channel(cur, present, delta):
     return present[0]
 
 
-def edit_target(selected, override_ch, last_channel):
-    """Channel a d/x/o hotkey acts on: selection wins over older mechanisms."""
+def edit_target(selected, last_channel):
+    """Channel a d/x/o hotkey acts on: the active selection wins, else the
+    most recent note's channel. Selection IS the live routing override, so
+    there is no separate 'c' precedence anymore."""
     if selected is not None:
         return selected
-    if override_ch is not None:
-        return override_ch
     return last_channel
 
 
@@ -720,15 +720,17 @@ class _noop_ctx:
         pass
 
 
-def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
+def status_lines(port, baud, loop_name, loop, rate, last_channel,
                  override_inst, last_program, recording=False, rec_elapsed=None,
                  selected=None, sel_name=None, width=None):
     """Return the two status-bar lines (the looper's two-line status bar).
 
-    While `recording` is true, line 1 is prefixed with a blinking red
-    "● REC" label (0.5 s half-period, derived from `rec_elapsed`) and a
-    steady M:SS clock of the take's elapsed time. When `width` is given both
-    lines are truncated to that many on-screen columns so they never wrap.
+    `selected` is the active channel: it reroutes live MIDI and is the record
+    target, so it is shown as "sel: <name>". While `recording` is true, line 1
+    is prefixed with a blinking red "● REC" label (0.5 s half-period, derived
+    from `rec_elapsed`) and a steady M:SS clock of the take's elapsed time.
+    When `width` is given both lines are truncated to that many on-screen
+    columns so they never wrap.
     """
     name_disp = loop_name if loop_name is not None else "no loop"
     length_disp = f"{loop.length:.2f}s" if loop.length > 0 else "0.00s"
@@ -739,22 +741,13 @@ def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
         rec = f"{label} {clock}  "
     else:
         rec = ""
-    if override_ch is not None:
-        ch_display = str(override_ch)
-        ch_mode = "(override)"
-    elif last_channel is not None:
-        ch_display = str(last_channel)
-        ch_mode = "(MIDI)"
-    else:
-        ch_display = "--"
-        ch_mode = "(MIDI)"
     if selected is not None:
         sel_disp = sel_name if sel_name else str(selected)
         seg = f"\033[1;33msel: {sel_disp}\033[0m"
-        if override_ch is not None:
-            seg += " (ovr)"
+    elif last_channel is not None:
+        seg = f"ch: \033[1;32m{last_channel}\033[0m (MIDI)"
     else:
-        seg = f"ch: \033[1;32m{ch_display}\033[0m {ch_mode}"
+        seg = f"ch: \033[1;32m--\033[0m (MIDI)"
     if override_inst is not None:
         inst_display = str(override_inst)
     elif last_program is not None:
@@ -812,14 +805,14 @@ def draw_column(present, loop, selected, names, lock=None, max_rows=None):
         sys.stdout.flush()
 
 
-def draw_status(port, baud, loop_name, engine, override_ch, last_channel,
+def draw_status(port, baud, loop_name, engine, last_channel,
                 override_inst, last_program, lock=None,
                 selected=None, sel_name=None):
     """Redraw the two-line status bar at the terminal bottom."""
     size = os.get_terminal_size()
     rows = size.lines
     line1, line2 = status_lines(port, baud, loop_name, engine.loop, engine.rate,
-                                override_ch, last_channel, override_inst, last_program,
+                                last_channel, override_inst, last_program,
                                 recording=engine.recording,
                                 rec_elapsed=engine.take_elapsed(time.monotonic()),
                                 selected=selected, sel_name=sel_name,
@@ -878,7 +871,6 @@ def main() -> None:
     stdout_lock = threading.Lock()
     state = {"ser": ser}
     write_error = False
-    override_ch = None
     override_inst = None
     last_channel = None
     last_program = None
@@ -890,6 +882,9 @@ def main() -> None:
     present = present_channels(nav_channels, engine.loop)
     if present:
         selected = present[0]  # start on the lowest channel
+    # The selection is the active channel: it reroutes live MIDI and is the
+    # record target, so the engine's override follows it.
+    engine.override_ch = selected
 
     def emit(cmd: str) -> None:
         """Write one reduzent command to the serial port; reconnect on failure."""
@@ -926,8 +921,8 @@ def main() -> None:
         # and sorted() over tracks races with main-thread mutations.
         with lock:
             present_now = present_channels(nav_channels, engine.loop)
-        draw_status(port, baud, loop_name, engine, override_ch,
-                    last_channel, override_inst, last_program, stdout_lock,
+        draw_status(port, baud, loop_name, engine, last_channel,
+                    override_inst, last_program, stdout_lock,
                     selected=selected, sel_name=nav_channels.get(selected)
                     if nav_channels else None)
         rows_now = os.get_terminal_size().lines
@@ -965,6 +960,7 @@ def main() -> None:
                 new = step_channel(selected, present_now, 1)
                 if new is not None:
                     selected = new
+                    engine.override_ch = new  # selection is the active channel
                     name = nav_channels.get(selected) if nav_channels else None
                     say("sel -> " + (name if name else str(selected)))
                     redraw()
@@ -978,13 +974,13 @@ def main() -> None:
             last_channel = msg.channel
         if msg.type == "program_change":
             last_program = msg.program
-        if override_ch is not None or override_inst is not None:
+        if selected is not None or override_inst is not None:
             parts = cmd.split()
-            if override_ch is not None:
+            if selected is not None:
                 if parts[0] in ("n", "x", "p", "a", "g", "v") and len(parts) >= 2:
-                    parts[1] = str(override_ch)
+                    parts[1] = str(selected)
                 elif parts[0] == "pa" and len(parts) >= 3:
-                    parts[1] = str(override_ch)
+                    parts[1] = str(selected)
             if override_inst is not None and parts[0] == "g" and len(parts) >= 3:
                 parts[2] = str(override_inst)
             cmd = " ".join(parts)
@@ -1038,8 +1034,8 @@ def main() -> None:
         # Console output (say()) starts at the top of its own scroll band.
         sys.stdout.write(f"\033[{2 + boot_panel_h};1H")
         sys.stdout.flush()
-        draw_status(port, baud, loop_name, engine, override_ch,
-                    last_channel, override_inst, last_program, stdout_lock,
+        draw_status(port, baud, loop_name, engine, last_channel,
+                    override_inst, last_program, stdout_lock,
                     selected=selected, sel_name=nav_channels.get(selected)
                     if nav_channels else None)
         draw_column(present, engine.loop, selected, nav_channels, stdout_lock,
@@ -1103,6 +1099,7 @@ def main() -> None:
                         break
                 if ch and ch in "0123456789":
                     selected = int(ch)  # jump; d/x no-op if nothing is there
+                    engine.override_ch = selected  # selection is the active channel
                     redraw()
                 if ch == "\t":
                     present_now = present_channels(nav_channels, engine.loop)
@@ -1112,6 +1109,7 @@ def main() -> None:
                         new = step_channel(selected, present_now, 1)
                         if new is not None:
                             selected = new
+                            engine.override_ch = new
                             redraw()
                 if ch == "\x1b":
                     # Arrow keys arrive as ESC [ X; drain the rest. Channels
@@ -1128,6 +1126,7 @@ def main() -> None:
                                 new = step_channel(selected, present_now, delta)
                                 if new is not None:
                                     selected = new
+                                    engine.override_ch = new
                                     redraw()
                 if ch == " ":
                     with lock:
@@ -1136,7 +1135,7 @@ def main() -> None:
                         emit(c)
                     redraw()
                 if ch in ("d", "D"):
-                    target = edit_target(selected, override_ch, last_channel)
+                    target = edit_target(selected, last_channel)
                     with lock:
                         if engine.recording:
                             engine.cancel()
@@ -1157,7 +1156,7 @@ def main() -> None:
                         say(f"nothing on ch {miss}")
                     redraw()
                 if ch in ("x", "X"):
-                    target = edit_target(selected, override_ch, last_channel)
+                    target = edit_target(selected, last_channel)
                     with lock:
                         if target is None:
                             live = []
@@ -1184,7 +1183,7 @@ def main() -> None:
                         for c in live:
                             emit(c)
                 if ch in ("o", "O"):
-                    target = edit_target(selected, override_ch, last_channel)
+                    target = edit_target(selected, last_channel)
                     if target is None:
                         say("no active channel to silence")
                     else:
@@ -1213,14 +1212,14 @@ def main() -> None:
                         try:
                             val = int(raw)
                             if 0 <= val <= 15:
-                                override_ch = val
+                                selected = val  # the active channel (same as navigating)
                                 engine.override_ch = val
                             else:
                                 print("channel must be 0-15")
                         except ValueError:
                             print("invalid input")
                     else:
-                        override_ch = None
+                        selected = None
                         engine.override_ch = None
                     redraw()
                 if ch in ("i", "I"):
@@ -1237,7 +1236,7 @@ def main() -> None:
                             if 0 <= val <= 127:
                                 override_inst = val
                                 # Send program change immediately to all leaves
-                                emit(f"g {override_ch if override_ch is not None else 0} {override_inst}")
+                                emit(f"g {selected if selected is not None else 0} {override_inst}")
                             else:
                                 print("program must be 0-127")
                         except ValueError:
@@ -1346,7 +1345,7 @@ def main() -> None:
                                     with lock:
                                         loop.anchor = time.monotonic()  # start at phase 0
                                         engine = Engine(loop)  # fresh seq + playback state
-                                        engine.override_ch = override_ch
+                                        engine.override_ch = selected
                                     loop_name = chosen
                                     print(f"loaded {chosen}")
                             redraw()

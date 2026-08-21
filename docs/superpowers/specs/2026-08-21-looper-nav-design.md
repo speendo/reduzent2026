@@ -29,22 +29,25 @@ Non-goals (backlog):
 
 - A `k` prompt to edit channels/hotkeys from inside the looper (hand-edit the
   JSON for now).
-- Selection as record target or live-MIDI reroute — explicitly rejected:
-  selecting must never change what playing sounds like or what a take records.
 - Further MIDI hotkey actions (mute/delete/rate via notes).
 - Mouse support.
 
-## The selection (edit cursor)
+## The selection (active channel)
+
+The selection is not just an edit cursor — it is the **active channel**: it
+reroutes live MIDI to the selected channel and is the record target. This
+replaces the old `c` override (the `c` prompt now just sets the same value as
+navigating there, including channels outside the column list).
 
 - New runtime variable `selected`: a channel number or `None`.
 - **Startup:** `selected` = lowest present channel (config list if set, else
   lowest tracked channel once a loop is loaded); `None` when neither is known.
+  When set, `selected` is also the record/routing override.
 - **Target precedence** for `d` (delete/cancel), `x` (mute/unmute) and `o`
-  (channel silence): `selected` → `c` override → most recent note's channel.
-  Until the first navigation this reproduces today's behavior exactly.
-- Recording is unchanged: takes still record onto the `c` override if set,
-  else lock to the first recorded note's channel. Live MIDI routing is never
-  affected by selection.
+  (channel silence): `selected` → most recent note's channel.
+- Recording: takes record onto the selected channel; without a selection they
+  lock to the first recorded note's channel as before. Live MIDI is rewritten
+  to the selected channel when one is set.
 - The selection persists until changed by another navigation key; loading a
   loop does not move it.
 
@@ -64,7 +67,7 @@ Keyboard — existing unless marked NEW:
 | `0`–`9` | Jump to channel N (**NEW**) |
 | `↑` / `↓` | Step prev/next through present channels, wrapping (**NEW**; channels are listed top-to-bottom in the column, so up/down matches the layout; `←`/`→` kept as aliases) |
 | `Tab` | Cycle forward through present channels (**NEW**) |
-| `c` | Channel override prompt (reroutes live MIDI + record target; unchanged) |
+| `c` | Set active channel by number prompt (0–15, incl. channels outside the column list; empty resets) — same effect as navigating there |
 | `i` | Instrument prompt |
 | `m` | Port menu |
 | `s` | Settings mode |
@@ -152,18 +155,17 @@ Native unit tests extend `tools/test_looper.py` (pure logic, fake clock):
 - Present-channel resolution (config → fallback to tracks → empty) and sort.
 - Next/prev stepping with wrap-around; digit mapping; startup lowest-channel
   init.
-- Target resolution precedence (selected → override → last channel).
+- Target resolution precedence (selected → last channel).
 - Config parsing/validation for `"channels"` and `"midi_hotkeys"`,
   including malformed input and the warn-once path.
 - Hotkey match → action dispatch; unmatched notes pass through untouched.
 - Column line rendering per state (ANSI/markup assertions); overflow marker.
 
 Manual on-device pass: arrow/tab/digit feel, blink cadence, layout at several
-terminal widths, foot-pedal hotkeys end-to-end.
+terminal widths, foot-pedal hotkeys end-to-end, live-MIDI reroute when the
+selection changes.
 
 ## Backlog
 
 - `k` prompt to edit/save channels and hotkeys from within the looper.
 - More MIDI hotkey actions (mute/delete/rate).
-- Revisit selection-as-record-target if the edit-cursor-only rule proves
-  awkward in practice.
