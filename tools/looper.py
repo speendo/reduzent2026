@@ -785,10 +785,6 @@ def main() -> None:
     if midi_name is None or port is None:
         raise SystemExit("no MIDI input or serial port detected")
     inport, ser = open_connections(midi_name, port, baud)
-    nav_channels, nav_warns = parse_channels(settings)
-    midi_hotkeys, hk_warns = parse_hotkeys(settings)
-    for w in nav_warns + hk_warns:
-        print(f"warning: {w}")
     save_settings(config, {"midi_input": midi_name, "serial_port": port, "baud": baud})
 
     # One shared lock guards the serial handle AND the engine: the MIDI callback
@@ -805,6 +801,8 @@ def main() -> None:
     loop_name = None  # None == "no loop"; set by 'w'/'r'
     engine = Engine()
     selected = None
+    nav_channels, nav_warns = parse_channels(settings)
+    midi_hotkeys, hk_warns = parse_hotkeys(settings)
     present = present_channels(nav_channels, engine.loop)
     if present:
         selected = present[0]  # start on the lowest channel
@@ -840,12 +838,15 @@ def main() -> None:
 
     def redraw():
         """Repaint status bar + channel column (the only redraw entry point)."""
+        # Snapshot under the model lock: this also runs on the MIDI thread,
+        # and sorted() over tracks races with main-thread mutations.
+        with lock:
+            present_now = present_channels(nav_channels, engine.loop)
         draw_status(port, baud, loop_name, engine, override_ch,
                     last_channel, override_inst, last_program, stdout_lock,
                     selected=selected, sel_name=nav_channels.get(selected)
                     if nav_channels else None)
-        draw_column(present_channels(nav_channels, engine.loop),
-                    engine.loop, selected, nav_channels, stdout_lock)
+        draw_column(present_now, engine.loop, selected, nav_channels, stdout_lock)
 
     def on_message(msg):
         nonlocal last_channel, last_program, selected
@@ -860,8 +861,9 @@ def main() -> None:
                 redraw()
                 return
             if act == "cycle":
-                new = step_channel(selected,
-                                   present_channels(nav_channels, engine.loop), 1)
+                with lock:  # snapshot tracks before stepping (see redraw)
+                    present_now = present_channels(nav_channels, engine.loop)
+                new = step_channel(selected, present_now, 1)
                 if new is not None:
                     selected = new
                     redraw()
@@ -923,6 +925,10 @@ def main() -> None:
         sys.stdout.write("\033[2J\033[1;1H")
         sys.stdout.flush()
         setup_scroll_region(2)
+        # Config warnings go here (not earlier) so the screen clear below
+        # doesn't wipe them before they're seen.
+        for w in nav_warns + hk_warns:
+            print(f"warning: {w}")
         draw_status(port, baud, loop_name, engine, override_ch,
                     last_channel, override_inst, last_program, stdout_lock,
                     selected=selected, sel_name=nav_channels.get(selected)
@@ -982,7 +988,7 @@ def main() -> None:
                         reset_scroll_region()
                         break
                 if ch and ch in "0123456789":
-                    selected = int(ch)  # jump; d/x report if nothing is there
+                    selected = int(ch)  # jump; d/x no-op if nothing is there
                     redraw()
                 if ch == "\t":
                     new = step_channel(selected,
@@ -1050,7 +1056,7 @@ def main() -> None:
                     with lock:
                         engine.set_rate(engine.rate - 0.05)
                     redraw()
-                if ch == "\x7f":  # Backspace: rate reset (moved off '0')
+                if ch in ("\x7f", "\x08"):  # Backspace: rate reset (moved off '0')
                     with lock:
                         engine.set_rate(1.0)
                     redraw()
