@@ -9,13 +9,17 @@ midi_bridge.py (which re-exports them from reduzent_shared). Run:
     python3 tools/test_reduzent_shared.py
 """
 
+import json
 import os
 import pty
+import tempfile
 import termios
 import tty
 import unittest
+import unittest.mock
 
-from reduzent_shared import raw_terminal
+import reduzent_shared as rs
+from reduzent_shared import find_config, raw_terminal
 
 
 def _close_pair(master, slave):
@@ -65,6 +69,53 @@ class TestRawTerminal(unittest.TestCase):
                 )
         finally:
             _close_pair(master, slave)
+
+
+class TestFindConfig(unittest.TestCase):
+    """Priority: --config flag > project config/ > user config dir."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.project = os.path.join(self.tmp.name, "project")
+        self.home = os.path.join(self.tmp.name, "home")
+        os.makedirs(os.path.join(self.project, "config"))
+        self.proj_cfg = os.path.join(self.project, "config", rs.CONFIG_NAME)
+        self.user_cfg = os.path.join(self.home, rs.CONFIG_NAME)
+
+        def fake_candidates():
+            return [self.proj_cfg]
+
+        # Point the module at the fake layout for the duration of each test.
+        p1 = unittest.mock.patch.object(rs, "_config_candidates", fake_candidates)
+        p1.start()
+        self.addCleanup(p1.stop)
+        p2 = unittest.mock.patch.object(rs, "DEFAULT_CONFIG", self.user_cfg)
+        p2.start()
+        self.addCleanup(p2.stop)
+
+    def _write(self, path, marker):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"who": marker}, f)
+
+    def test_explicit_flag_wins_even_if_missing(self):
+        explicit = os.path.join(self.tmp.name, "explicit.json")
+        self._write(self.proj_cfg, "proj")
+        got = find_config(explicit)
+        self.assertEqual(got, explicit)  # creation target, even before it exists
+
+    def test_project_config_beats_user(self):
+        self._write(self.proj_cfg, "proj")
+        self._write(self.user_cfg, "user")
+        self.assertEqual(find_config(), self.proj_cfg)
+
+    def test_user_config_when_no_project_file(self):
+        self._write(self.user_cfg, "user")
+        self.assertEqual(find_config(), self.user_cfg)
+
+    def test_new_file_created_in_user_dir(self):
+        self.assertEqual(find_config(), self.user_cfg)
 
 
 if __name__ == "__main__":

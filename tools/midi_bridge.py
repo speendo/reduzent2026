@@ -38,6 +38,7 @@ from typing import Optional
 
 from reduzent_shared import (
     DEFAULT_CONFIG,
+    find_config,
     load_settings,
     menu_choice,
     midi_to_command,
@@ -110,6 +111,9 @@ def main() -> None:
     for i, a in enumerate(argv):
         if a == "--config" and i + 1 < len(argv):
             config = argv[i + 1]
+    # Resolve once: --config flag > project config/ > user config dir.
+    # All later loads AND saves go to this same file.
+    config = find_config(config)
 
     def detected():
         return (
