@@ -848,8 +848,26 @@ def main() -> None:
                     engine.loop, selected, nav_channels, stdout_lock)
 
     def on_message(msg):
-        nonlocal last_channel
-        nonlocal last_program
+        nonlocal last_channel, last_program, selected
+        if msg.type in ("note_on", "note_off"):
+            act = hotkey_action(midi_hotkeys, msg.type, msg.channel, msg.note,
+                                getattr(msg, "velocity", 0))
+            if act == "record":
+                with lock:
+                    live = engine.toggle(time.monotonic())
+                for c in live:
+                    emit(c)
+                redraw()
+                return
+            if act == "cycle":
+                new = step_channel(selected,
+                                   present_channels(nav_channels, engine.loop), 1)
+                if new is not None:
+                    selected = new
+                    redraw()
+                return
+            if act == "swallow":
+                return
         cmd = midi_to_command(msg)
         if cmd is None:
             return
@@ -963,7 +981,7 @@ def main() -> None:
                     else:
                         reset_scroll_region()
                         break
-                if ch in "0123456789":
+                if ch and ch in "0123456789":
                     selected = int(ch)  # jump; d/x report if nothing is there
                     redraw()
                 if ch == "\t":
