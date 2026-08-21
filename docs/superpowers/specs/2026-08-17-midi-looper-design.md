@@ -1,7 +1,10 @@
 # MIDI Looper Design
 
 Date: 2026-08-17
-Status: draft for review
+Status: implemented
+Note: the Hotkeys and Status bar sections are superseded by
+`2026-08-21-looper-nav-design.md` (channel selection, navigation, channel
+column, MIDI hotkeys).
 
 ## Purpose
 
