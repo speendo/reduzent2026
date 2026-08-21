@@ -34,6 +34,7 @@ from looper import (
     step_channel,
     edit_target,
     hotkey_action,
+    column_lines,
 )
 
 
@@ -1044,6 +1045,75 @@ class TestHotkeyAction(unittest.TestCase):
 
     def test_empty_hotkeys_never_match(self):
         self.assertIsNone(hotkey_action({}, "note_on", 15, 60, 100))
+
+
+class TestColumnLines(unittest.TestCase):
+    def build(self, tracks, selected=None, names=None, blink=True, max_rows=20):
+        return column_lines(sorted(tracks), Loop(tracks=tracks), selected,
+                            names, max_rows, blink)
+
+    def test_untracked_dim_tracked_plain(self):
+        loop = Loop(tracks={1: Track()})
+        lines = column_lines([0, 1], loop, None, None, 20, True)
+        self.assertIn("\033[2m 0\033[0m", lines[0])          # ch 0 untracked
+        self.assertEqual(lines[1].strip(), "1")              # ch 1 plain
+
+    def test_muted_marker(self):
+        t = Track(); t.muted = True
+        self.assertIn("*", self.build({0: t})[0])
+
+    def test_selected_blink_highlight(self):
+        line = self.build({0: Track()}, selected=0)[0]
+        self.assertTrue(line.startswith("\033[1;31;7m"))
+        self.assertTrue(line.endswith("\033[0m"))
+
+    def test_selected_not_blinking_is_plain_bright(self):
+        line = self.build({0: Track()}, selected=0, blink=False)[0]
+        self.assertNotIn("7m", line)
+
+    def test_names_used_numbers_fallback(self):
+        lines = self.build({0: Track()}, names={0: "kick"})
+        self.assertIn("kick", lines[0])
+        self.assertIn("0", self.build({0: Track()})[0])
+
+    def test_overflow_marker(self):
+        tracks = {ch: Track() for ch in range(6)}
+        lines = self.build(tracks, max_rows=3)
+        self.assertEqual(len(lines), 3)
+        self.assertEqual(lines[-1].strip(), "+4 more")
+
+
+class TestStatusLineSelection(unittest.TestCase):
+    def base(self, **kw):
+        # Defaults go in as keywords so callers may override any of them
+        # (duplicate positional binding would raise TypeError); lines come
+        # back ANSI-stripped like TestStatusLines._plain.
+        kw.setdefault("override_ch", None)
+        kw.setdefault("last_channel", None)
+        kw.setdefault("override_inst", None)
+        kw.setdefault("last_program", None)
+        line1, line2 = status_lines("/dev/ttyUSB0", 115200, None, Loop(),
+                                    1.0, **kw)
+        return _ANSI_RE.sub("", line1), _ANSI_RE.sub("", line2)
+
+    def test_no_selection_keeps_old_rendering(self):
+        _, line2 = self.base(last_channel=3)
+        self.assertIn("ch: 3 (MIDI)", line2)
+
+    def test_selection_shows_name_and_override_tag(self):
+        _, line2 = self.base(selected=1, sel_name="snare", override_ch=1)
+        self.assertIn("sel: snare (ovr)", line2)
+        self.assertNotIn("(override)", line2)
+
+    def test_selection_without_name_shows_number(self):
+        _, line2 = self.base(selected=7)
+        self.assertIn("sel: 7 ", line2)
+
+    def test_help_mentions_new_keys_not_zero_reset(self):
+        _, line2 = self.base()
+        self.assertIn("0-9", line2)
+        self.assertIn("nav", line2)
+        self.assertNotIn("0 reset", line2)
 
 
 if __name__ == "__main__":

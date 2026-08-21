@@ -616,6 +616,34 @@ def hotkey_action(hotkeys, msg_type, channel, note, velocity):
     return hit if msg_type == "note_on" and velocity > 0 else "swallow"
 
 
+_PANEL_LABEL_MAX = 8  # keep in sync with _clean_name
+
+
+def column_lines(present, loop, selected, names, max_rows, blink_on):
+    """Render the right-side channel column, one string per terminal row.
+
+    States: dim = no track, plain = track, '*' = muted, bold-red-inverse =
+    selected while blink_on. Overflow beyond max_rows becomes "+n more".
+    """
+    lines = []
+    visible = present[:max_rows - 1] if len(present) > max_rows else present
+    for ch in visible:
+        label = str(names.get(ch, ch))[:_PANEL_LABEL_MAX] if names else str(ch)
+        track = loop.tracks.get(ch)
+        if ch == selected and blink_on:
+            body = f"\033[1;31;7m {label}\033[0m"
+        elif track is None:
+            body = f"\033[2m {label}\033[0m"
+        elif track.muted:
+            body = f"*{label}"
+        else:
+            body = f" {label}"
+        lines.append(body)
+    if len(present) > max_rows:
+        lines.append(f"+{len(present) - max_rows + 1} more")
+    return lines
+
+
 _PROGRAM_NAMES = {0: "1-bit", 1: "arp", 2: "mono"}
 
 
@@ -628,7 +656,8 @@ class _noop_ctx:
 
 
 def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
-                 override_inst, last_program, recording=False, rec_elapsed=None):
+                 override_inst, last_program, recording=False, rec_elapsed=None,
+                 selected=None, sel_name=None):
     """Return the two status-bar lines (the looper's two-line status bar).
 
     While `recording` is true, line 1 is prefixed with a blinking red
@@ -653,6 +682,13 @@ def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
     else:
         ch_display = "--"
         ch_mode = "(MIDI)"
+    if selected is not None:
+        sel_disp = sel_name if sel_name else str(selected)
+        seg = f"\033[1;33msel: {sel_disp}\033[0m"
+        if override_ch is not None:
+            seg += " (ovr)"
+    else:
+        seg = f"ch: \033[1;32m{ch_display}\033[0m {ch_mode}"
     if override_inst is not None:
         inst_display = str(override_inst)
     elif last_program is not None:
@@ -665,22 +701,25 @@ def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
         f"  trk: {len(loop.tracks)}  rate: x{rate:.2f}"
     )
     line2 = (
-        f" \033[1;36m\u25b8\033[0m ch: \033[1;32m{ch_display}\033[0m {ch_mode}  "
+        f" \033[1;36m\u25b8\033[0m {seg}  "
         f"inst: \033[1;32m{inst_display}\033[0m   "
         f"\033[2mspace rec  d del  x mute  p panic  o noff  w save  r load  "
-        f"+/- rate  0 reset  c ch  i inst  m menu  s settings  q quit\033[0m"
+        f"+/- rate  \u232b rate1  0-9 ch  tab/\u2190\u2192 nav  "
+        f"c ch  i inst  m menu  s settings  q quit\033[0m"
     )
     return line1, line2
 
 
 def draw_status(port, baud, loop_name, engine, override_ch, last_channel,
-                override_inst, last_program, lock=None):
+                override_inst, last_program, lock=None,
+                selected=None, sel_name=None):
     """Redraw the two-line status bar at the terminal bottom."""
     rows = os.get_terminal_size().lines
     line1, line2 = status_lines(port, baud, loop_name, engine.loop, engine.rate,
                                 override_ch, last_channel, override_inst, last_program,
                                 recording=engine.recording,
-                                rec_elapsed=engine.take_elapsed(time.monotonic()))
+                                rec_elapsed=engine.take_elapsed(time.monotonic()),
+                                selected=selected, sel_name=sel_name)
     ctx = lock if lock else _noop_ctx()
     with ctx:
         sys.stdout.write("\033[s")  # save cursor
