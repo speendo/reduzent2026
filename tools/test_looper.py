@@ -310,6 +310,25 @@ class TestEngineFresh(unittest.TestCase):
         self.assertIsNone(eng.loop.anchor)
 
 
+class TestTakeElapsed(unittest.TestCase):
+    def test_none_when_not_recording(self):
+        eng = Engine()
+        self.assertIsNone(eng.take_elapsed(100.0))
+
+    def test_counts_from_take_start(self):
+        eng = Engine()
+        eng.toggle(10.0)
+        self.assertAlmostEqual(eng.take_elapsed(12.5), 2.5)
+
+    def test_none_after_take_stops(self):
+        eng = Engine()
+        eng.override_ch = 0
+        eng.toggle(0.0)
+        eng.record("n 0 60 100", 0, 60, 1.0)
+        eng.toggle(4.0)
+        self.assertIsNone(eng.take_elapsed(5.0))
+
+
 class TestEngineOverdub(unittest.TestCase):
     def _fresh(self, eng):
         eng.override_ch = 0
@@ -855,6 +874,51 @@ class TestStatusLines(unittest.TestCase):
         self.assertIn("ch: 3", line2)
         self.assertIn("(MIDI)", line2)
         self.assertIn("inst: 7", line2)
+
+    def test_recording_shows_indicator_and_clock(self):
+        line1, _ = status_lines("p", 9600, None, Loop(), 1.0,
+                                None, None, None, None,
+                                recording=True, rec_elapsed=65.0)
+        plain = self._plain(line1)
+        self.assertIn("\u25cf REC", plain)
+        self.assertIn("1:05", plain)
+
+    def test_not_recording_has_no_indicator(self):
+        line1, _ = status_lines("p", 9600, None, Loop(), 1.0,
+                                None, None, None, None)
+        self.assertNotIn("REC", self._plain(line1))
+
+    def test_rec_blink_visible_phase(self):
+        line1, _ = status_lines("p", 9600, None, Loop(), 1.0,
+                                None, None, None, None,
+                                recording=True, rec_elapsed=0.2)
+        plain = self._plain(line1)
+        self.assertIn("\u25cf REC", plain)
+        self.assertIn("0:00", plain)  # clock stays up while the label blinks
+
+    def test_rec_blink_hidden_phase(self):
+        line1, _ = status_lines("p", 9600, None, Loop(), 1.0,
+                                None, None, None, None,
+                                recording=True, rec_elapsed=0.7)
+        plain = self._plain(line1)
+        self.assertNotIn("\u25cf REC", plain)
+        self.assertIn("0:00", plain)
+
+    def test_rec_blink_keeps_line_width(self):
+        on, _ = status_lines("p", 9600, None, Loop(), 1.0,
+                             None, None, None, None,
+                             recording=True, rec_elapsed=0.2)
+        off, _ = status_lines("p", 9600, None, Loop(), 1.0,
+                              None, None, None, None,
+                              recording=True, rec_elapsed=0.7)
+        # Hidden phase reserves the label's columns so the line never jumps.
+        self.assertEqual(len(self._plain(on)), len(self._plain(off)))
+
+    def test_rec_clock_truncates_subsecond(self):
+        line1, _ = status_lines("p", 9600, None, Loop(), 1.0,
+                                None, None, None, None,
+                                recording=True, rec_elapsed=5.9)
+        self.assertIn("0:05", self._plain(line1))
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ import select
 import sys
 import termios
 import threading
+import time
 import tty
 from dataclasses import dataclass, field
 from typing import Optional
@@ -197,6 +198,12 @@ class Engine:
     @property
     def recording(self):
         return self._recording
+
+    def take_elapsed(self, now):
+        """Seconds since the current take started, or None when not recording."""
+        if not self._recording or self._take_anchor is None:
+            return None
+        return now - self._take_anchor
 
     @property
     def halted(self):
@@ -519,10 +526,22 @@ class _noop_ctx:
 
 
 def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
-                 override_inst, last_program):
-    """Return the two status-bar lines (the looper's two-line status bar)."""
+                 override_inst, last_program, recording=False, rec_elapsed=None):
+    """Return the two status-bar lines (the looper's two-line status bar).
+
+    While `recording` is true, line 1 is prefixed with a blinking red
+    "● REC" label (0.5 s half-period, derived from `rec_elapsed`) and a
+    steady M:SS clock of the take's elapsed time.
+    """
     name_disp = loop_name if loop_name is not None else "no loop"
     length_disp = f"{loop.length:.2f}s" if loop.length > 0 else "0.00s"
+    if recording and rec_elapsed is not None:
+        clock = f"{int(rec_elapsed // 60)}:{int(rec_elapsed) % 60:02d}"
+        # Hidden phase reserves the label's columns so the line never jumps.
+        label = "\033[1;31m\u25cf REC\033[0m" if int(rec_elapsed * 2) % 2 == 0 else "     "
+        rec = f"{label} {clock}  "
+    else:
+        rec = ""
     if override_ch is not None:
         ch_display = str(override_ch)
         ch_mode = "(override)"
@@ -539,7 +558,7 @@ def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
     else:
         inst_display = "--"
     line1 = (
-        f" \033[1;36m\u25b8\033[0m \033[1;32m{port}\033[0m @ \033[1;32m{baud}\033[0m"
+        f" {rec}\033[1;36m\u25b8\033[0m \033[1;32m{port}\033[0m @ \033[1;32m{baud}\033[0m"
         f"  loop: \033[1;33m{name_disp}\033[0m  len: \033[1;32m{length_disp}\033[0m"
         f"  trk: {len(loop.tracks)}  rate: x{rate:.2f}"
     )
@@ -557,7 +576,9 @@ def draw_status(port, baud, loop_name, engine, override_ch, last_channel,
     """Redraw the two-line status bar at the terminal bottom."""
     rows = os.get_terminal_size().lines
     line1, line2 = status_lines(port, baud, loop_name, engine.loop, engine.rate,
-                                override_ch, last_channel, override_inst, last_program)
+                                override_ch, last_channel, override_inst, last_program,
+                                recording=engine.recording,
+                                rec_elapsed=engine.take_elapsed(time.monotonic()))
     ctx = lock if lock else _noop_ctx()
     with ctx:
         sys.stdout.write("\033[s")  # save cursor
@@ -570,7 +591,6 @@ def draw_status(port, baud, loop_name, engine, override_ch, last_channel,
 def main() -> None:
     import serial
     import serial.tools.list_ports
-    import time
     import mido
 
     argv = sys.argv[1:]
@@ -744,7 +764,9 @@ def main() -> None:
 
                 if not select.select([sys.stdin], [], [], 0.1)[0]:
                     now = time.monotonic()
-                    if now - last_redraw >= 2.0:
+                    # Live clock + blink while recording; lazy refresh otherwise.
+                    interval = 0.15 if engine.recording else 2.0
+                    if now - last_redraw >= interval:
                         draw_status(port, baud, loop_name, engine, override_ch,
                                     last_channel, override_inst, last_program, stdout_lock)
                         last_redraw = now
