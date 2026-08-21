@@ -1112,8 +1112,9 @@ class TestColumnLines(unittest.TestCase):
     def test_untracked_dim_tracked_plain(self):
         loop = Loop(tracks={1: Track()})
         lines = column_lines([0, 1], loop, None, None, 20, True)
-        self.assertIn("\033[2m 0\033[0m", lines[0])          # ch 0 untracked
-        self.assertEqual(lines[1].strip(), "1")              # ch 1 plain
+        self.assertTrue(lines[0].startswith("\033[2m"))       # ch 0 untracked dim
+        self.assertIn("0", lines[0])
+        self.assertEqual(lines[1].strip(), "1")               # ch 1 plain
 
     def test_muted_marker(self):
         t = Track(); t.muted = True
@@ -1131,7 +1132,16 @@ class TestColumnLines(unittest.TestCase):
     def test_names_used_numbers_fallback(self):
         lines = self.build({0: Track()}, names={0: "kick"})
         self.assertIn("kick", lines[0])
+        self.assertIn("0:", lines[0])        # channel number always shown
         self.assertIn("0", self.build({0: Track()})[0])
+
+    def test_all_cells_same_width(self):
+        """Short vs long names must not shift the column (no jumping)."""
+        names = {0: "A", 1: "Piezo S", 2: "Piezo M", 3: "Piezo L"}
+        loop = Loop(tracks={})
+        lines = column_lines([0, 1, 2, 3], loop, 0, names, 20, True)
+        widths = {_visible_len(l) for l in lines}
+        self.assertEqual(len(widths), 1)     # every line identical width
 
     def test_overflow_marker(self):
         tracks = {ch: Track() for ch in range(6)}

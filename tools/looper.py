@@ -617,7 +617,8 @@ def hotkey_action(hotkeys, msg_type, channel, note, velocity):
     return hit if msg_type == "note_on" and velocity > 0 else "swallow"
 
 
-_PANEL_LABEL_MAX = 8  # keep in sync with _clean_name
+_PANEL_NAME_MAX = 8   # name part of a cell, keep in sync with _clean_name
+_PANEL_CELL = _PANEL_NAME_MAX + 4  # "15: " channel prefix + name
 
 
 _ESC_SEQ = re.compile("\x1b\\[[0-9;]*[A-Za-z]|\x1b\\][^\x07]*\x07")
@@ -681,20 +682,27 @@ def column_lines(present, loop, selected, names, max_rows, blink_on):
 
     States: dim = no track, plain = track, '*' = muted, bold-red-inverse =
     selected while blink_on. Overflow beyond max_rows becomes "+n more".
+    Every cell is exactly _PANEL_CELL columns wide ("<ch>: <name>" or just
+    "<ch>"), so the column never jumps when the selected name is shorter or
+    longer.
     """
     lines = []
     visible = present[:max_rows - 1] if len(present) > max_rows else present
     for ch in visible:
-        label = str(names.get(ch, ch))[:_PANEL_LABEL_MAX] if names else str(ch)
+        if names and ch in names:
+            cell = f"{ch}: {names[ch]}"
+        else:
+            cell = str(ch)
+        cell = cell[:_PANEL_CELL].ljust(_PANEL_CELL)
         track = loop.tracks.get(ch)
         if ch == selected and blink_on:
-            body = f"\033[1;31;7m {label}\033[0m"
+            body = f"\033[1;31;7m {cell}\033[0m"
         elif track is None:
-            body = f"\033[2m {label}\033[0m"
+            body = f"\033[2m {cell}\033[0m"
         elif track.muted:
-            body = f"*{label}"
+            body = f"*{cell}"
         else:
-            body = f" {label}"
+            body = f" {cell}"
         lines.append(body)
     if len(present) > max_rows:
         lines.append(f"+{len(present) - max_rows + 1} more")
@@ -762,7 +770,7 @@ def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
         f" \033[1;36m\u25b8\033[0m {seg}  "
         f"inst: \033[1;32m{inst_display}\033[0m   "
         f"\033[2mspace rec  d del  x mute  p panic  o noff  w save  r load  "
-        f"+/- rate  \u232b rate1  0-9 ch  tab/\u2190\u2192 nav  "
+        f"+/- rate  \u232b rate1  0-9 ch  tab/\u2191\u2193 nav  "
         f"c ch  i inst  m menu  s settings  q quit\033[0m"
     )
     if width is not None:
@@ -771,7 +779,7 @@ def status_lines(port, baud, loop_name, loop, rate, override_ch, last_channel,
     return line1, line2
 
 
-_PANEL_WIDTH = 12  # reserved right margin for the channel column
+_PANEL_WIDTH = 14  # reserved right margin for the channel column
 
 
 def panel_height(rows, n_channels):
@@ -927,6 +935,15 @@ def main() -> None:
                     max_rows=panel_height(rows_now, len(present_now)) + 1)
 
     def on_message(msg):
+        # mido's rtmidi backend calls this from its own thread without any
+        # try/except: one exception here would kill MIDI input for the whole
+        # session (no notes, no hotkeys). Never let that happen silently.
+        try:
+            _on_message(msg)
+        except Exception as e:
+            say(f"midi error: {e}")
+
+    def _on_message(msg):
         nonlocal last_channel, last_program, selected
         if msg.type in ("note_on", "note_off"):
             act = hotkey_action(midi_hotkeys, msg.type, msg.channel, msg.note,
@@ -936,6 +953,7 @@ def main() -> None:
                     live = engine.toggle(time.monotonic())
                 for c in live:
                     emit(c)
+                say("take: " + ("rec" if engine.recording else "stop"))
                 redraw()
                 return
             if act == "cycle":
@@ -947,6 +965,8 @@ def main() -> None:
                 new = step_channel(selected, present_now, 1)
                 if new is not None:
                     selected = new
+                    name = nav_channels.get(selected) if nav_channels else None
+                    say("sel -> " + (name if name else str(selected)))
                     redraw()
                 return
             if act == "swallow":
@@ -1094,11 +1114,13 @@ def main() -> None:
                             selected = new
                             redraw()
                 if ch == "\x1b":
-                    # Arrow keys arrive as ESC [ D / ESC [ C; drain the rest.
+                    # Arrow keys arrive as ESC [ X; drain the rest. Channels
+                    # are listed top-to-bottom in the column, so up/down step
+                    # prev/next; left/right are kept as aliases.
                     if select.select([fd], [], [], 0.01)[0]:
                         seq = os.read(fd, 2).decode("utf-8", "replace")
-                        if seq in ("[D", "[C"):
-                            delta = -1 if seq == "[D" else 1
+                        delta = {"[A": -1, "[B": 1, "[D": -1, "[C": 1}.get(seq)
+                        if delta is not None:
                             present_now = present_channels(nav_channels, engine.loop)
                             if not present_now:
                                 say("no channels to navigate")

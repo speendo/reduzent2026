@@ -62,7 +62,7 @@ Keyboard — existing unless marked NEW:
 | `+` / `-` | Playback rate up/down (0.05 step) |
 | `Backspace` | Rate reset to 1.0× (**moved** — was `0`) |
 | `0`–`9` | Jump to channel N (**NEW**) |
-| `←` / `→` | Step prev/next through present channels, wrapping (**NEW**) |
+| `↑` / `↓` | Step prev/next through present channels, wrapping (**NEW**; channels are listed top-to-bottom in the column, so up/down matches the layout; `←`/`→` kept as aliases) |
 | `Tab` | Cycle forward through present channels (**NEW**) |
 | `c` | Channel override prompt (reroutes live MIDI + record target; unchanged) |
 | `i` | Instrument prompt |
@@ -121,7 +121,8 @@ existing tracks; nothing new requires the file.
 ## Right-side channel column
 
 - All present channels listed top-right, one per line, sorted by channel
-  number: name (or number), state-marked —
+  number: `<ch>: <name>` (or just `<ch>` when unnamed) in a fixed-width cell
+  so the column never jumps as selection moves between short and long names —
   dim = no track · bright = track · muted marker (`*`) = muted ·
   **bold red inverse, blinking = selected**.
 - Console output lines are truncated to leave the column free; the panel
