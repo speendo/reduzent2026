@@ -574,6 +574,32 @@ def parse_hotkeys(settings):
     return hk, warns
 
 
+def present_channels(channels, loop):
+    """Channels the UI navigates: config list if set, else tracked channels."""
+    if channels:
+        return sorted(channels)
+    return sorted(loop.tracks)
+
+
+def step_channel(cur, present, delta):
+    """Neighbor of `cur` in `present` (wrap-around); None when nothing to walk."""
+    if not present:
+        return None
+    if cur in present:
+        i = (present.index(cur) + delta) % len(present)
+        return present[i]
+    return present[0]
+
+
+def edit_target(selected, override_ch, last_channel):
+    """Channel a d/x/o hotkey acts on: selection wins over older mechanisms."""
+    if selected is not None:
+        return selected
+    if override_ch is not None:
+        return override_ch
+    return last_channel
+
+
 _PROGRAM_NAMES = {0: "1-bit", 1: "arp", 2: "mono"}
 
 

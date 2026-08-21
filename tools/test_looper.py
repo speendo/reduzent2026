@@ -30,6 +30,9 @@ from looper import (
     status_lines,
     parse_channels,
     parse_hotkeys,
+    present_channels,
+    step_channel,
+    edit_target,
 )
 
 
@@ -978,6 +981,47 @@ class TestParseHotkeys(unittest.TestCase):
         )
         self.assertEqual(hk, {"record": (15, 60)})
         self.assertEqual(len(warns), 3)
+
+
+class TestPresentChannels(unittest.TestCase):
+    def test_config_wins_sorted(self):
+        loop = Loop(tracks={3: Track(), 1: Track()})
+        self.assertEqual(present_channels({5: "a", 2: "b"}, loop), [2, 5])
+
+    def test_fallback_to_tracks(self):
+        loop = Loop(tracks={3: Track(), 1: Track()})
+        self.assertEqual(present_channels(None, loop), [1, 3])
+
+    def test_both_empty(self):
+        self.assertEqual(present_channels(None, Loop()), [])
+
+
+class TestStepChannel(unittest.TestCase):
+    def test_wrap_forward_and_back(self):
+        self.assertEqual(step_channel(5, [1, 3, 5], 1), 1)
+        self.assertEqual(step_channel(1, [1, 3, 5], -1), 5)
+
+    def test_neighbor(self):
+        self.assertEqual(step_channel(3, [1, 3, 5], 1), 5)
+        self.assertEqual(step_channel(3, [1, 3, 5], -1), 1)
+
+    def test_none_or_foreign_cur_starts_at_first(self):
+        self.assertEqual(step_channel(None, [1, 3], 1), 1)
+        self.assertEqual(step_channel(9, [1, 3], -1), 1)
+
+    def test_empty_present_returns_none(self):
+        self.assertIsNone(step_channel(1, [], 1))
+
+    def test_single_element_stays(self):
+        self.assertEqual(step_channel(1, [1], 1), 1)
+
+
+class TestEditTarget(unittest.TestCase):
+    def test_precedence(self):
+        self.assertEqual(edit_target(2, 5, 9), 2)
+        self.assertEqual(edit_target(None, 5, 9), 5)
+        self.assertEqual(edit_target(None, None, 9), 9)
+        self.assertIsNone(edit_target(None, None, None))
 
 
 if __name__ == "__main__":
