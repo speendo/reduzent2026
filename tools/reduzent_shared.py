@@ -24,22 +24,21 @@ DEFAULT_CONFIG = os.path.join(
 
 
 def _config_candidates():
-    """Ordered config paths to try: project-local first, then user-level."""
-    # Project root = parent of tools/, so the launch directory doesn't matter.
-    project = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "config", CONFIG_NAME,
+    """Ordered config paths to try: tools/config first, then user-level."""
+    # Lives next to the tools so it survives regardless of launch directory.
+    local = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "config", CONFIG_NAME
     )
-    return [project, DEFAULT_CONFIG]
+    return [local, DEFAULT_CONFIG]
 
 
 def find_config(explicit=None):
     """Resolve which settings file to use.
 
-    Priority: explicit --config path > <project>/config/midi-bridge.json >
+    Priority: explicit --config path > tools/config/midi-bridge.json >
     ~/.config/reduzent/midi-bridge.json. The first existing file wins; if
     none exists yet, new settings are created at the explicit path (if given)
-    or in the user config dir — never in the project tree by default.
+    or in the user config dir — never inside the repo by default.
     """
     if explicit:
         return explicit

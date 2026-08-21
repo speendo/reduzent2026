@@ -72,7 +72,7 @@ class TestRawTerminal(unittest.TestCase):
 
 
 class TestFindConfig(unittest.TestCase):
-    """Priority: --config flag > project config/ > user config dir."""
+    """Priority: --config flag > tools/config/ > user config dir."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
