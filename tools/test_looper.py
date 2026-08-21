@@ -33,6 +33,7 @@ from looper import (
     present_channels,
     step_channel,
     edit_target,
+    hotkey_action,
 )
 
 
@@ -1022,6 +1023,27 @@ class TestEditTarget(unittest.TestCase):
         self.assertEqual(edit_target(None, 5, 9), 5)
         self.assertEqual(edit_target(None, None, 9), 9)
         self.assertIsNone(edit_target(None, None, None))
+
+
+class TestHotkeyAction(unittest.TestCase):
+    HK = {"record": (15, 60), "cycle": (15, 62)}
+
+    def test_note_on_matches(self):
+        self.assertEqual(hotkey_action(self.HK, "note_on", 15, 60, 100), "record")
+        self.assertEqual(hotkey_action(self.HK, "note_on", 15, 62, 1), "cycle")
+
+    def test_wrong_channel_or_note_passes_through(self):
+        self.assertIsNone(hotkey_action(self.HK, "note_on", 0, 60, 100))
+        self.assertIsNone(hotkey_action(self.HK, "note_on", 15, 61, 100))
+
+    def test_note_off_is_swallowed(self):
+        self.assertEqual(hotkey_action(self.HK, "note_off", 15, 60, 0), "swallow")
+
+    def test_velocity_zero_note_on_is_swallowed(self):
+        self.assertEqual(hotkey_action(self.HK, "note_on", 15, 60, 0), "swallow")
+
+    def test_empty_hotkeys_never_match(self):
+        self.assertIsNone(hotkey_action({}, "note_on", 15, 60, 100))
 
 
 if __name__ == "__main__":

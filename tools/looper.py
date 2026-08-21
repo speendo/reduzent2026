@@ -600,6 +600,22 @@ def edit_target(selected, override_ch, last_channel):
     return last_channel
 
 
+def hotkey_action(hotkeys, msg_type, channel, note, velocity):
+    """Classify one MIDI message against the configured hotkeys.
+
+    "record"/"cycle" fire on note-on; the matching note-off (or velocity-0
+    note-on) is "swallow"ed so it never sounds or gets recorded.
+    """
+    hit = None
+    for action, (ch, nt) in hotkeys.items():
+        if ch == channel and nt == note:
+            hit = action
+            break
+    if hit is None:
+        return None
+    return hit if msg_type == "note_on" and velocity > 0 else "swallow"
+
+
 _PROGRAM_NAMES = {0: "1-bit", 1: "arp", 2: "mono"}
 
 
